@@ -1,0 +1,77 @@
+# ---------------------------------------------------------------------------
+# .gitignore - Android (CyanogenMod 7.2) on the Nintendo 3DS port
+#
+# This repo is source code + documentation.  Build products, vendored
+# downloads, SD-card captures and the per-session development scratch
+# (notes, logs, archived boot artifacts) are local-only and ignored.
+# ---------------------------------------------------------------------------
+
+# --- build outputs / generated staging trees -------------------------------
+/out/
+/sd-staging/
+/bin/
+/dev/
+/etc/
+/mnt/
+/proc/
+/sys/
+/tmp/
+/init
+/init.rc
+/init.nintendo3ds.rc
+/default.prop
+
+# --- downloaded / vendored third-party material ----------------------------
+# src/    - busybox tarball + the android-staging symlink (BUILD.md step 0)
+# tools/  - smali.jar and friends (BUILD.md step 0)
+# firmware/ - carved Nintendo NWM Wi-Fi blobs (BUILD.md step 7); console-
+#             specific, never committed
+/src/
+/tools/
+/firmware/
+/research/
+
+# --- build logs, archived boot artifacts, session captures (not source) ----
+/logs/
+/archives/
+/sdlog/
+/sdlog-*/
+
+# --- machine-specific build-host setup (keep a local copy, never commit) ---
+/setup/wsl-*.sh
+
+# --- session scratch: development notes + throwaway scripts (never public) -
+/work/
+
+# --- binaries / archives / images / media ----------------------------------
+*.apk
+*.apks
+*.rar
+*.7z
+*.zip
+*.tgz
+*.tar
+*.tar.gz
+*.img
+*.cpio
+*.cpio.gz
+*.firm
+*.bin
+*.gb
+*.gbc
+*.jar
+*.so
+*.o
+*.exe
+*.dll
+
+# --- python / editor / OS --------------------------------------------------
+__pycache__/
+*.pyc
+Thumbs.db
+desktop.ini
+
+# --- editor backups --------------------------------------------------------
+*~
+*.swp
+*.lnk

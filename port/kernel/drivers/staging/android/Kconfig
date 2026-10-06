@@ -1,0 +1,50 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# Android compatibility drivers for the Nintendo 3DS port.
+#
+# The stock linux-3ds kernel (6.x) already provides everything the 3DS needs
+# (LCD boot framebuffer, GPIO keys, TSC touchscreen, MCU RTC/battery, SD via
+# arm9linuxfw virtio). What it does NOT provide is the small set of legacy
+# Android kernel interfaces that the 2009 Android userspace still expects.
+#
+# Note: /dev/binder comes from mainline (drivers/android + CONFIG_ANDROID_BINDER_IPC)
+# and is NOT re-vendored here.
+
+menuconfig ANDROID_LEGACY_DRIVERS
+	bool "Android driver interfaces"
+	default y
+	help
+	  Kernel interfaces required by the Android userspace on the
+	  Nintendo 3DS. Say Y unless you know what you are doing.
+
+if ANDROID_LEGACY_DRIVERS
+
+config ANDROID_ASHMEM
+	tristate "Android ashmem (anonymous shared memory)"
+	depends on SHMEM
+	default y
+	help
+	  /dev/ashmem, used by Android's libcutils (ashmem_create_region),
+	  MemoryHeapBase, SurfaceFlinger and every gralloc implementation.
+	  Removed from mainline in 5.18; re-vendored from the Android common
+	  kernel for the Android userspace.
+
+config ANDROID_LOGGER
+	tristate "Android logger (/dev/log/*)"
+	default y
+	help
+	  /dev/log/main, /dev/log/events and /dev/log/radio, written by Android's
+	  liblog and read by logcat (or by this port's logdump).  Without it every
+	  Android userspace message - zygote, dalvik, surfaceflinger - is dropped
+	  silently, which makes debugging a headless bring-up guesswork.
+	  From-scratch implementation, see drivers/staging/android/logger.c.
+
+config ANDROID_LOW_MEMORY_KILLER
+	bool "Android low memory killer"
+	depends on MMU
+	default n
+	help
+	  Optional. Android's ActivityManager already kills background
+	  processes, so this is not required for a first boot.
+
+endif # ANDROID_LEGACY_DRIVERS

@@ -1,0 +1,104 @@
+# Legacy init.rc delta for the prebuilt flavors, kept for reference
+#
+# This is NOT a complete init.rc.  The stock
+# frameworks/base/cmds/bootanimation + system/core/rootdir/init.rc is used as
+# the base; this file lists the changes the 3DS port needs.  Apply it with
+# legacy/apply-userland-port.sh (the copy step is part of M3).
+#
+# Boot flow on the 3DS:
+#
+#   firm_linux_loader -> Linux -> initramfs /init (busybox, see mkinitramfs.sh)
+#      mounts /proc /sys /dev, mounts the SD FAT partition on /mnt/sd,
+#      loop-mounts /mnt/sd/android/system.img on /system and data.img on /data,
+#      then   exec /system/bin/init
+#   Android's init (now PID 1) reads this init.rc.
+#
+# Therefore everything that mounting is normally in "on fs" here must be
+# removed: a failing mount in the legacy init is fatal.
+
+# ---------------------------------------------------------------------------
+# 1. REMOVE from the stock init.rc
+# ---------------------------------------------------------------------------
+#   on fs
+#       mount yaffs2 mtd@system /system      <- remove (already mounted)
+#       mount yfs2 mtd@system /system        <- remove
+#       mount yaffs2 mtd@userdata /data      <- remove
+#       ...                                  <- remove all mounts: the initramfs
+#                                               did them, and a failing mount
+#                                               aborts init on the legacy port.
+#
+#   mount yaffs2 mtd@cache /cache            <- remove or keep on tmpfs
+#   mount yaffs2 mtd@misc /misc              <- remove
+#
+# 2. Device nodes.  The legacy init replaces /dev with a fresh tmpfs, so the nodes
+#    that the initramfs created are gone.  Declare them here instead.
+#    (old Android has no ueventd coldboot for everything, so mknod is normal)
+
+on init
+    # legacy kernel interfaces
+    mknod /dev/binder       c  10 200      # CONFIG_ANDROID_BINDER_IPC ("binder")
+    mknod /dev/ashmem       c  10 201      # ANDROID_ASHMEM (misc, dynamic minor -> see below)
+    mkdir  /dev/log         0775 system log
+    # framebuffer: the legacy EGLDisplaySurface tries /dev/graphics/fb%u
+    # first.  fb0 is the kernel console (top screen); our LCD driver is fb1,
+    # so point Android's fb0 at it.
+    mkdir  /dev/graphics    0755 root root
+    symlink /dev/fb1        /dev/graphics/fb0
+    symlink /dev/fb0        /dev/graphics/fb1
+    # input
+    mkdir  /dev/input       0755 root input
+    chmod  0660             /dev/input/event0
+    chown  root input       /dev/input/event0
+
+# NOTE on minors: ashmem registers with MISC_DYNAMIC_MINOR, so its minor is
+# allocated at runtime and mknod may guess wrong.  Two safe options:
+#   a) let ueventd create it (ueventd.nintendo3ds.rc has the rule), or
+#   b) pin it by passing  ashmem.minor=<n>  (init_module style is not available
+#      for built-in drivers) - simplest is (a), plus a `symlink` fallback.
+# The M2 bring-up image already proves the device is present; check with
+#   ls -l /sys/class/misc/ashmem/dev
+
+# ---------------------------------------------------------------------------
+# 3. ADD: properties for a 320x240 QVGA-class landscape screen
+# ---------------------------------------------------------------------------
+
+on init
+    setprop ro.sf.lcd_density 120
+    setprop ro.sf.show_screen_rotation 0
+    setprop ro.product.model "Nintendo 3DS"
+    setprop ro.product.name "nintendo3ds"
+    setprop ro.product.device "nintendo3ds"
+    setprop ro.product.board "nintendo3ds"
+    setprop ro.build.characteristics default,nomedia
+    # no GPU, no camera, no telephony, no network yet
+    setprop ro.hardware nintendo3ds
+    setprop ro.opengles.version 65536        # GLES 1.1, software (libGLES_android)
+
+# ---------------------------------------------------------------------------
+# 4. ADD: the services the legacy port needs, minus the goldfish/msm ones
+# ---------------------------------------------------------------------------
+
+service servicemanager /system/bin/servicemanager
+    user system
+    critical
+    onrestart restart zygote
+    onrestart restart media
+
+service zygote /system/bin/app_process -Xzygote /system/bin --zygote --start-system-server
+    socket zygote stream 666
+    onrestart restart media
+
+service media /system/bin/mediaserver
+    # writes to /dev/log/main and /dev/log/events; without the 2009 logger
+    # driver these writes fail silently (that is fine for M3)
+
+service surfaceflinger /system/bin/surfaceflinger
+    user system
+    # 1.6: SurfaceFlinger is a thread inside system_server, not a service.
+    # This entry only exists if you build the standalone variant.
+
+# ---------------------------------------------------------------------------
+# 5. Our own bring-up helper: draw something on the bottom screen from Android
+# ---------------------------------------------------------------------------
+service fbtest /system/bin/fbtest --once
+    oneshot

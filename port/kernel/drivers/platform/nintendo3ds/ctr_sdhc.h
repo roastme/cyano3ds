@@ -1,0 +1,165 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ *  Nintendo 3DS Secure Digital Host Controller driver
+ *
+ *  Copyright (C) 2021 Santiago Herrera
+ */
+
+/*
+ * SD CMD flags
+ */
+#define SDHC_CMD_MASK	(0x3F)
+
+#define SDHC_CMDTYPE_CMD	(0 << 6)
+#define SDHC_CMDTYPE_APP	(1 << 6)
+
+#define SDHC_CMDRSP_AUTO	(0 << 8)
+#define SDHC_CMDRSP_NONE	(3 << 8)
+#define SDHC_CMDRSP_R1	(4 << 8)
+#define SDHC_CMDRSP_R1B	(5 << 8)
+#define SDHC_CMDRSP_R2	(6 << 8)
+#define SDHC_CMDRSP_R3	(7 << 8)
+#define SDHC_CMDRSP_R6	(4 << 8)
+#define SDHC_CMDRSP_R7	(4 << 8)
+#define SDHC_CMDRSP_MASK	(7 << 8)
+
+#define SDHC_CMD_DATA_XFER	BIT(11)
+#define SDHC_CMD_DATA_READ	BIT(12)
+#define SDHC_CMD_DATA_MULTI	BIT(13)
+#define SDHC_CMD_SECURE	BIT(14)
+
+#define SDHC_CMD_IS_READ(c)	\
+	(((c) & SDHC_CMD_DATA_XFER) && ((c) & SDHC_CMD_DATA_READ))
+
+#define SDHC_CMD_IS_WRITE(c)	\
+	(((c) & SDHC_CMD_DATA_XFER) && !((c) & SDHC_CMD_DATA_READ))
+
+enum {
+	SDHC_STAT_CMDRESPEND	= BIT(0),
+	SDHC_STAT_DATA_END	= BIT(2),
+	SDHC_STAT_CARDREMOVE	= BIT(3),
+	SDHC_STAT_CARDINSERT	= BIT(4),
+	SDHC_STAT_CARDPRESENT	= BIT(5),
+	SDHC_STAT_WRITEPROT	= BIT(7),
+
+	SDHC_STAT_RX_READY	= BIT(24),
+	SDHC_STAT_TX_REQUEST	= BIT(25),
+	SDHC_STAT_CMD_READY	= BIT(29),
+	SDHC_STAT_CMD_BUSY	= BIT(30),
+
+	SDHC_ERR_BAD_CMD	= BIT(16),
+	SDHC_ERR_CRC_FAIL	= BIT(17),
+	SDHC_ERR_STOP_BIT	= BIT(18),
+	SDHC_ERR_DATATIMEOUT	= BIT(19),
+	SDHC_ERR_TX_OVERFLOW	= BIT(20),
+	SDHC_ERR_RX_UNDERRUN	= BIT(21),
+	SDHC_ERR_CMD_TIMEOUT	= BIT(22),
+	SDHC_ERR_ILLEGAL_ACC	= BIT(31),
+};
+
+enum {
+	SDHC_CMD	= 0x00,
+	SDHC_CMD_PARAM = 0x04,
+	SDHC_CMD_RESPONSE	= 0x0C,
+	SDHC_STOP_INTERNAL	= 0x08,
+
+	SDHC_IRQ_STAT	= 0x1C,
+	SDHC_IRQ_MASK	= 0x20,
+
+	SDHC_ERROR_STATUS	= 0x2C,
+
+	SDHC_CARD_PORTSEL	= 0x02,
+	SDHC_CARD_CLKCTL	= 0x24,
+	SDHC_CARD_OPTION	= 0x28,
+
+	SDHC_CARD_IRQ_CTL	= 0x34,
+	SDHC_CARD_IRQ_STAT	= 0x36,
+	SDHC_CARD_IRQ_MASK	= 0x38,
+
+	SDHC_SOFTRESET	= 0xE0,
+
+	SDHC_DATA_CTL	= 0xD8,
+	SDHC_DATA32_CTL	= 0x100,
+
+	SDHC_DATA16_BLK_CNT	= 0x0A,
+	SDHC_DATA16_BLK_LEN	= 0x26,
+	SDHC_DATA16_FIFO_PORT	= 0x30,
+
+	SDHC_DATA32_BLK_CNT	= 0x108,
+	SDHC_DATA32_BLK_LEN	= 0x104,
+	SDHC_DATA32_FIFO_PORT	= 0x10C,
+};
+
+/* SDHC_DATA_CTL */
+#define SDHC_DATA_CTL_WORD_FIFO_EN	BIT(1)
+
+/* SDHC_DATA32_CTL */
+#define SDHC_DATA32_CTL_TXRQ_IRQEN	BIT(12)
+#define SDHC_DATA32_CTL_RXRDY_IRQEN	BIT(11)
+#define SDHC_DATA32_CTL_WORD_FIFO_CLR	BIT(10)
+#define SDHC_DATA32_CTL_NTXRQ_PENDING	BIT(9)
+#define SDHC_DATA32_CTL_RXRDY_PENDING	BIT(8)
+#define SDHC_DATA32_CTL_WORD_FIFO_EN	BIT(1)
+
+#define SDHC_DATA32_TX_PENDING(ctl)	\
+	(((ctl) & SDHC_DATA32_CTL_TXRQ_IRQEN) && \
+	!((ctl) & SDHC_DATA32_CTL_NTXRQ_PENDING))
+
+#define SDHC_DATA32_RX_PENDING(ctl)	\
+	(((ctl) & SDHC_DATA32_CTL_RXRDY_IRQEN) && \
+	((ctl) & SDHC_DATA32_CTL_RXRDY_PENDING))
+
+#define SDHC_DATA32_PENDING(ctl)	\
+	(SDHC_DATA32_RX_PENDING(ctl) || SDHC_DATA32_TX_PENDING(ctl))
+
+/* SDHC_STOP_INTERNAL */
+#define SDHC_STOP_INTERNAL_ISSUE	BIT(0)
+#define SDHC_STOP_INTERNAL_ENABLE	BIT(8)
+
+/* SDHC_CARD_CLKCTL */
+#define SDHC_CARD_CLKCTL_PIN_FREEZE	BIT(9)
+#define SDHC_CARD_CLKCTL_PIN_ENABLE	BIT(8)
+
+/* SDHC_CARD_OPTION */
+#define SDHC_CARD_OPTION_1BIT	BIT(15)
+#define SDHC_CARD_OPTION_4BIT	(0)
+#define SDHC_CARD_OPTION_NOC2	BIT(14)
+#define SDHC_CARD_OPTION_TIMEOUT_MASK	(0xFF)
+#define SDHC_CARD_OPTION_TIMEOUT(x)	(((x) & 15) << 4)
+#define SDHC_CARD_OPTION_RETRIES(x)	((x) & 15)
+
+struct ctr_sdhc {
+	struct device *dev;
+	void __iomem *regs;
+
+	struct mmc_host *mmc;
+	struct clk *sdclk;
+	struct gpio_desc *wifi_en; /* N3DS_WIFI_SDIO_RECOVERY */
+	struct mutex recovery_lock;
+	bool host_registered;
+
+	spinlock_t lock;
+
+	struct mmc_request *mrq;
+	struct mmc_command *cmd;
+	struct mmc_data *data;
+
+	struct sg_mapping_iter sg_miter;
+
+	/* Fail a request that loses its final FIFO/data edge instead of leaving
+	 * mmc_wait_for_req_done() and the ath6k worker blocked forever. */
+	struct timer_list timeout_timer;
+	/* The 3DS card-IRQ line is not dependable.  Keep MMC_CAP_SDIO_IRQ so
+	 * mmc_signal_sdio_irq() can dispatch the function handler directly, and
+	 * use this timer as the hardware-proven 10 ms notification fallback. */
+	struct timer_list sdio_timer;
+	bool sdio_irq_on;
+
+	bool init_trace_done;
+	/* Bounded transport diagnostics for the first CMD53 requests only. */
+	u32 transport_trace_count;
+	u32 transport_irq_trace_count;
+	u32 transport_trace_seq;
+	u32 transport_trace_active_seq;
+	bool transport_trace_active;
+};

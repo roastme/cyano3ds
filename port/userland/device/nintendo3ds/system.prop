@@ -1,0 +1,24 @@
+#
+# system.prop for the Nintendo 3DS (CyanogenMod 7.2)
+#
+# This file is merged into /system/build.prop by the build.  The values match
+# the tested CM7.2 bring-up: 120 dpi on a 320x240 landscape panel,
+# software GLES 1.1 (ro.opengles.version 0x10000), 64 MB Dalvik heaps so the
+# framework fits in RAM.
+#
+
+ro.sf.lcd_density=120
+qemu.sf.lcd_density=120
+ro.opengles.version=65536
+ro.hardware=nintendo3ds
+ro.board.platform=nintendo3ds
+ro.product.device=nintendo3ds
+ro.product.board=nintendo3ds
+ro.telephony.default_network=0
+ro.com.google.locationfeatures=0
+ro.com.google.networklocation=0
+ro.kernel.android.checkjni=0
+ro.setupwizard.mode=DISABLED
+dalvik.vm.heapsize=64m
+dalvik.vm.heapgrowthlimit=64m
+dalvik.vm.stack-trace-file=/data/anr/traces.txt

@@ -1,0 +1,35 @@
+# DumpNWMWifi.gm9 -- legacy GM9Script version of DumpNWMWifi.lua.
+#
+# GodMode9 2.2.x uses Lua scripts by default; this .gm9 file is only a
+# fallback for older GodMode9 versions.  Prefer DumpNWMWifi.lua if you have it.
+#
+# Dumps the NWM module (Atheros AR6014G Wi-Fi Xtensa firmware source) to
+# 0:/gm9/out/wifi/.  See DumpNWMWifi.lua for the full background.
+
+set OUTDIR $[GM9OUT]/wifi
+mkdir -o $[OUTDIR]
+
+set PREVIEW_MODE "Dumping NWM (Wi-Fi firmware)\nto $[OUTDIR]"
+
+if find -f 1:/title/00040130/00002d02/content/????????.app NWMAPP
+  echo "Found NWM: $[NWMAPP]"
+  cp -n $[NWMAPP] $[OUTDIR]/nwm.app
+  extrcode -o $[NWMAPP] $[OUTDIR]/nwm.code
+  echo "Wrote $[OUTDIR]/nwm.code"
+else
+  echo "NWM normal title not found at\n1:/title/00040130/00002d02"
+end
+
+# Safe-mode NWM also carries Xtensa blocks; try it too (may not exist).
+if find -f 1:/title/00040130/00002d03/content/????????.app NWMSAFE
+  echo "Found safe NWM: $[NWMSAFE]"
+  cp -n $[NWMSAFE] $[OUTDIR]/nwm_safe.app
+  extrcode -o $[NWMSAFE] $[OUTDIR]/nwm_safe.code
+end
+if find -f 1:/title/00040130/20002d03/content/????????.app NWMSAFEN3
+  echo "Found safe NWM (N3DS): $[NWMSAFEN3]"
+  cp -n $[NWMSAFEN3] $[OUTDIR]/nwm_safe_n3ds.app
+  extrcode -o $[NWMSAFEN3] $[OUTDIR]/nwm_safe_n3ds.code
+end
+
+echo "Done.  Copy .code to the PC and run\nport/scripts/nwm-extract.py"

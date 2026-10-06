@@ -1,0 +1,24 @@
+#
+# ueventd.nintendo3ds.rc - ueventd rules for the Nintendo 3DS
+#
+# The port's initramfs hand-builds /dev (devtmpfs refuses userspace mknod in
+# the way the 2009 Android init expects), so ueventd is disabled in the patched
+# init.rc.  These rules are kept for reference / if ueventd is ever enabled:
+# they cover the Android kernel interfaces and the ctr_lcd_fb framebuffer.
+#
+
+# Android kernel interfaces
+/dev/binder                0666   root       root
+/dev/ashmem                0666   root       root
+
+# Android logger (classic 2009 ABI names)
+/dev/log_main              0662   system     log
+/dev/log_events            0662   system     log
+/dev/log_radio             0662   system     log
+
+# framebuffers: fb0 = top-screen kernel console, fb1 = bottom-screen Android
+/dev/fb0                   0666   root       root
+/dev/fb1                   0666   root       root
+
+# input: touchscreen + 3DS buttons
+/dev/input/event*          0660   root       input

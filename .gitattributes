@@ -1,0 +1,18 @@
+# Keep text files as LF in the repository and on checkout.  The build scripts
+# under port/ run under WSL/Linux, so CRLF would break them.
+* text=auto eol=lf
+
+# Explicit binaries (never text-munge these).
+*.bin              binary
+*.firm             binary
+*.dtb              binary
+*.gz               binary
+*.img              binary
+*.apk              binary
+*.apks             binary
+*.jar              binary
+*.so               binary
+*.exe              binary
+*.dll              binary
+zImage             binary
+initramfs.cpio.gz  binary

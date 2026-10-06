@@ -1,0 +1,56 @@
+Cyano3DS
+
+Cyano3DS is a native port of CyanogenMod 7.2 (Android 2.3.7 / API 10) to the
+Nintendo 3DS family.  Android runs on the bottom screen and boots as a FIRM
+payload on top of the linux-3ds kernel.
+
+Licensing
+---------
+
+Cyano3DS's own files (the top-level files, docs/, port/scripts/,
+port/userland/, port/initramfs/, port/gm9/ and the kernel source under
+port/kernel/) are licensed under the Apache License, Version 2.0; see LICENSE.
+A file that states a different license keeps it.
+
+Kernel code, including the code that port/scripts/*.py and port/scripts/*.sh
+write into the kernel tree, is GPL-2.0, as the Linux kernel is.
+
+Third-party code keeps its upstream license:
+
+  linux-3ds (kernel, firm_linux_loader, arm9linuxfw)   GPL-2.0
+  CyanogenMod and the Android Open Source Project      Apache-2.0
+  port/kernel/drivers/staging/ath6k_legacy/            Atheros permissive
+                                                       license (see the file
+                                                       headers)
+  port/kernel/drivers/platform/nintendo3ds/ctr_sdhc.*  GPL-2.0 (linux-3ds)
+  port/kernel/drivers/platform/nintendo3ds/tsc/*       GPL-2.0
+
+Credits
+-------
+
+* linux-3ds (https://github.com/linux-3ds) — the Linux kernel port, the ARM11
+  FIRM loader (firm_linux_loader) and the ARM9 SD/PXI firmware (arm9linuxfw)
+  this project boots on, plus the base 3DS SD host controller driver.
+
+* Android3DS / Octoblimp (https://github.com/Octoblimp/Android-Eclair-3DS) —
+  an earlier Android 2.0 (Eclair) port to the same hardware.  Cyano3DS builds
+  on it and reuses, adapted to this kernel and userspace:
+
+    - the pre-mainline staging AR6K Wi-Fi driver and its Nintendo NWM firmware
+      boot path (port/kernel/drivers/staging/ath6k_legacy/),
+    - the AR6002 SDIO host-controller changes
+      (port/kernel/drivers/platform/nintendo3ds/ctr_sdhc.c),
+    - the resistive-touchscreen driver
+      (port/kernel/drivers/platform/nintendo3ds/tsc/touch.c).
+
+  Cyano3DS targets a later Android release (2.3.7 vs 2.0), but the Wi-Fi and
+  touch bring-up started from that project's work.
+
+* CyanogenMod and the Android Open Source Project — the userspace.
+
+* The AR6014G Wi-Fi firmware is not shipped.  Each builder dumps it from their
+  own console's NWM and carves it with port/scripts/nwm-to-ath6k.py; see the
+  "Wi-Fi" section of docs/WIFI.md.
+
+Android is a trademark of Google LLC.  Nintendo 3DS is a trademark of Nintendo.
+This project is not affiliated with or endorsed by either.
