@@ -40,6 +40,9 @@
 # --- machine-specific build-host setup (keep a local copy, never commit) ---
 /setup/wsl-*.sh
 
+# --- legacy build scripts (superseded by port/scripts/, never public) ----
+/legacy/
+
 # --- session scratch: development notes + throwaway scripts (never public) -
 /work/
 
