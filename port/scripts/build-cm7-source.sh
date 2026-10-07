@@ -40,7 +40,8 @@ say() { printf '\n==> %s\n' "$*"; }
 
 [ -d "$SYSDIR/framework" ] || {
 	echo "missing source-build tree: $SYSDIR" >&2
-	echo "  build CM7.2 first:  cd $CM7_DIR && . build/envsetup.sh && brunch nintendo3ds" >&2
+	echo "  build CM7.2 first:  cd $CM7_DIR && . build/envsetup.sh && make droidcore -j2" >&2
+	echo "  (NOT brunch nintendo3ds — TARGET_NO_KERNEL=true; see docs/CM7.md)" >&2
 	exit 1; }
 [ -f "$RAMDISK/init" ] && [ -f "$RAMDISK/init.rc" ] || {
 	echo "missing build ramdisk: $RAMDISK/{init,init.rc}" >&2

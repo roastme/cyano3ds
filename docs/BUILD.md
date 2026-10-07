@@ -4,7 +4,7 @@ Cyano3DS is assembled from four pieces: the Linux kernel, the ARM9/ARM11
 firmware, the CyanogenMod 7.2 userspace and the initramfs/boot stage. The
 scripts live in `port/scripts/`.
 
-The build runs on Linux or WSL2 (Ubuntu). **The checkout and the kernel tree
+The build runs on Linux (Ubuntu). **The checkout and the kernel tree
 must live on a Linux filesystem**, not on NTFS — a checkout on `/mnt/c` fails
 because the kernel contains files whose names (for example `aux.c`) are
 reserved on Windows. Keep everything under `~/...`.
@@ -63,10 +63,11 @@ ln -sfn ../port/android-staging src/android-staging
 wget -P src https://busybox.net/downloads/busybox-1.36.1.tar.bz2
 
 # 3. smali — mkinitramfs.sh assembles port/initramfs/PortHelper.smali with it.
-#    (Upstream publishes no binaries on its GitHub releases page, so fetch it
-#    from Maven Central, where org.smali:smali is published.)
-wget -O tools/smali.jar \
-  https://repo1.maven.org/maven2/org/smali/smali/2.5.2/smali-2.5.2.jar
+#    The Maven Central jar has no Main-Class manifest and needs its deps,
+#    so build a fat executable jar (one-time):
+bash port/scripts/build-smali-jar.sh
+#    (or manually: wget the smali-2.5.2.jar from Maven Central and repackage
+#     with jcommander, guava, antlr, dexlib2, util, stringtemplate)
 ```
 
 (`src/`, `tools/smali.jar`, `busybox-*.tar.bz2` and `firmware/` are all
@@ -87,6 +88,18 @@ itself in step 3):
 ```bash
 mkdir -p "$(dirname "$KDIR")"
 [ -d "$KDIR" ] || git clone https://github.com/linux-3ds/linux.git "$KDIR"
+```
+
+**If the `git clone` times out** (large repo, flaky network), download the tarball instead and extract it:
+
+```bash
+mkdir -p "$(dirname "$KDIR")"
+[ -d "$KDIR" ] || {
+	curl -L -o /tmp/linux-3ds.tar.gz \
+		https://github.com/linux-3ds/linux/archive/refs/heads/master.tar.gz
+	tar xzf /tmp/linux-3ds.tar.gz -C "$(dirname "$KDIR")"
+	mv "$(dirname "$KDIR")/linux-master" "$KDIR"
+}
 ```
 
 ## 2. Kernel
@@ -131,8 +144,14 @@ device tree, build, then package (run the first two inside the chroot, the
 third back on the host):
 
 ```bash
+bash port/scripts/setup-chroot.sh              # one-time: create the 12.04 chroot + sync
+bash port/scripts/cleanup-cm7-tree.sh "$CM7_DIR"  # remove stale device trees
 bash port/scripts/apply-cm7-device.sh "$CM7_DIR"   # install device/nintendo3ds
-# then, in the CM7 tree:  . build/envsetup.sh && brunch nintendo3ds
+# then, in the CM7 tree:  . build/envsetup.sh && make droidcore -j2
+# (NOT brunch nintendo3ds — see docs/CM7.md: TARGET_NO_KERNEL=true means
+#  brunch/bacon can never work; droidcore is the correct target)
+# Run the build in the foreground of a long-running shell — background
+# builds may be killed when the launching session exits on some systems.
 
 CM7_DIR="$CM7_DIR" bash port/scripts/build-cm7-source.sh
 # -> out/android/{system,data}.img, out/cm7-init/

@@ -83,4 +83,5 @@ echo
 echo "==> done.  Build with:"
 echo "      cd $CM7_DIR"
 echo "      . build/envsetup.sh"
-echo "      brunch nintendo3ds"
+echo "      make droidcore -j2"
+echo "      (NOT brunch nintendo3ds — TARGET_NO_KERNEL=true; see docs/CM7.md)"

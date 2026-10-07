@@ -47,7 +47,7 @@ make 3.81, Python 2.7 and gcc 4.6:
 repo init -u https://github.com/CyanogenMod/android.git -b gb-release-7.2
 repo sync
 bash /path/to/port/scripts/apply-cm7-device.sh /path/to/cm7
-cd /path/to/cm7 && . build/envsetup.sh && brunch nintendo3ds
+cd /path/to/cm7 && . build/envsetup.sh && make droidcore -j2
 
 # back on the host
 CM7_DIR=/path/to/cm7 bash port/scripts/build-cm7-source.sh
@@ -57,6 +57,14 @@ bash port/scripts/mksd.sh --with-android
 
 The CM fork of `external/svox` was removed from GitHub, so the manifest drops
 that project and the AOSP `android-2.3.7_r1` source is staged in its place.
+
+**Use `make droidcore`, not `brunch nintendo3ds`.**  `brunch` / `make bacon`
+are guarded by `ifneq ($(TARGET_NO_KERNEL),true)` in `build/core/Makefile`,
+and the 3DS `BoardConfig.mk` sets `TARGET_NO_KERNEL := true` (the kernel is
+the linux-3ds zImage, not an Android boot.img).  `droidcore` builds
+systemimage + ramdisk + userdata without the OTA packaging that a no-kernel
+device cannot use.  Run the build in the foreground of a long-running shell —
+background builds may be killed when the launching session exits on some systems.
 
 See [BUILD.md](BUILD.md) for the host setup.
 
