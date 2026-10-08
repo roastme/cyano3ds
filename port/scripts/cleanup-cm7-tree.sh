@@ -40,20 +40,17 @@ for d in device/*/; do
 	esac
 done
 
-echo "==> removing external/svox (CM fork is gone from GitHub)"
-if [ -d external/svox ]; then
-	rm -rf external/svox
-	echo "    rm -rf external/svox"
-fi
-
 echo "==> trimming vendor/cyanogen/products to nintendo3ds + generic"
 PROD_DIR="vendor/cyanogen/products"
 if [ -d "$PROD_DIR" ]; then
 	for f in "$PROD_DIR"/*.mk; do
 		[ -f "$f" ] || continue
 		b=$(basename "$f")
+		# Keep the port's product + the generic fallback, AND the common_*.mk /
+		# themes*.mk files that cyanogen_nintendo3ds.mk inherits (and that
+		# apply-cm7-device.sh patches).  Deleting them breaks the build.
 		case "$b" in
-			cyanogen_nintendo3ds.mk|generic.mk)
+			cyanogen_nintendo3ds.mk|generic.mk|common.mk|common_full.mk|common_full_no_themes.mk|common_versions.mk|themes.mk|themes_common.mk)
 				echo "    keep $b"
 				;;
 			*)

@@ -14,7 +14,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-CM7_DIR="${1:-${CM7_DIR:-/root/p3ds/cm7}}"
+CM7_DIR="${1:-${CM7_DIR:-$HOME/p3ds/cm7}}"
 
 say() { printf '\n==> %s\n' "$*"; }
 

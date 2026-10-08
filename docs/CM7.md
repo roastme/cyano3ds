@@ -42,12 +42,19 @@ CM7.2 will not build on a modern host — make 4.x, Python 3 and JDK 17 all
 break it. The working recipe is an **Ubuntu 12.04 chroot** with OpenJDK 6, GNU
 make 3.81, Python 2.7 and gcc 4.6:
 
+The chroot and the CM7.2 tree are one-time, cached state — `setup-chroot.sh`
+creates them once and then skips them.  The flow scripts
+(`cleanup-cm7-tree.sh`, `apply-cm7-device.sh`, `stage-svox.sh`) are
+idempotent: re-run them after pulling any port update.  `cr-run.sh` runs the
+chroot steps and self-escalates to root; after a WSL restart, run it once to
+re-make the chroot's `/proc`, `/sys`, `/dev` bind mounts before building.
+
 ```bash
 # inside the chroot
 repo init -u https://github.com/CyanogenMod/android.git -b gb-release-7.2
 repo sync
 bash /path/to/port/scripts/apply-cm7-device.sh /path/to/cm7
-cd /path/to/cm7 && . build/envsetup.sh && make droidcore -j2
+cd /path/to/cm7 && . build/envsetup.sh && lunch cyanogen_nintendo3ds-userdebug && make droidcore -j2
 
 # back on the host
 CM7_DIR=/path/to/cm7 bash port/scripts/build-cm7-source.sh
@@ -57,6 +64,13 @@ bash port/scripts/mksd.sh --with-android
 
 The CM fork of `external/svox` was removed from GitHub, so the manifest drops
 that project and the AOSP `android-2.3.7_r1` source is staged in its place.
+(`setup-chroot.sh` installs `port/cm7-local-manifests/remove-broken.xml`, which
+also drops `android_hardware_ti_wpan` — it has no `gb-release-7.2` branch — and
+`stage-svox.sh` does the AOSP svox staging.)
+
+The chroot is Python 2.7, so it needs a Python-2-compatible `repo` tool:
+`setup-chroot.sh` installs v2.7 (the last such release) and sets `REPO_REV=v2.7`
+so the launcher's self-bootstrap doesn't upgrade to a Python-3-only version.
 
 **Use `make droidcore`, not `brunch nintendo3ds`.**  `brunch` / `make bacon`
 are guarded by `ifneq ($(TARGET_NO_KERNEL),true)` in `build/core/Makefile`,
@@ -84,6 +98,20 @@ nothing bootable:
    every module twice.
 4. **No `copybit`/`fbtest` HAL.** The 3DS composites in software with the
    generic gralloc, so the device tree builds no `copybit` HAL.
+5. **`lunch cyanogen_nintendo3ds-userdebug` is required.** `make droidcore` with
+   no lunch builds the default `generic` product, and `build-cm7-source.sh`
+   then can't find `out/target/product/nintendo3ds/`.
+6. **`external/svox` must be staged after `cleanup-cm7-tree.sh`.** The CM fork
+   is gone from GitHub; `stage-svox.sh` puts AOSP's `android-2.3.7_r1` there.
+   (The cleanup script deliberately leaves `external/svox` alone now.)
+7. **The 32-bit host tools need hand-made `.so` symlinks.** precise has no
+   32-bit libstdc++/zlib *dev* packages, so `aidl`/`aapt` fail to link until
+   `setup-chroot.sh` points `libstdc++.so`/`libz.so` at the 32-bit runtimes.
+8. **`gperf` is required** (libwebcore's `CSSValueKeywords.h` generation) and is
+   in the chroot's package list.
+9. **The build runs as root in the chroot, so `out/` is root-owned.**
+   `sudo chown -R $USER $CM7_DIR/out` before `build-cm7-source.sh`, which
+   edits files under `out/`.
 
 ## Kernel support used by CM7
 

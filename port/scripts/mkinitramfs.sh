@@ -19,11 +19,11 @@
 # Boot log: init writes it to the SD card when the card is writable
 # (SD:/CYANO3DS/*.log) and always renders it on the bottom screen.
 #
-# Usage: mkinitramfs.sh [out-dir]        (default /root/p3ds/dist)
+# Usage: mkinitramfs.sh [out-dir]        (default $HOME/p3ds/dist)
 
 set -euo pipefail
 
-OUT="${1:-/root/p3ds/dist}"
+OUT="${1:-$HOME/p3ds/dist}"
 MINIMAL_DIAGNOSTICS="${MINIMAL_DIAGNOSTICS:-0}"
 # ---------------------------------------------------------------------------
 # Android flavor.  The kernel and the bring-up machinery are shared; only the
@@ -94,7 +94,7 @@ if [ -f "$NWM/stub_code.bin" ] && [ -f "$NWM/main_type4.bin" ]; then
 		cp "$NWM/main_type1.bin" "$ROOT/lib/firmware/ath6k/AR6002/nwm/"
 	ls -l "$ROOT/lib/firmware/ath6k/AR6002/nwm" | sed 's/^/    /'
 else
-	echo "    WARNING: no $NWM/stub_code.bin (ath6k will fail its firmware load)" >&2
+	echo "    WARNING: no NWM Wi-Fi blobs in $NWM (set NWM_DIR or copy them to firmware/ath6k/AR6002/nwm/; see docs/BUILD.md step 7) — ath6k will fail its firmware load" >&2
 fi
 # Keep the AR6014 SDK-style set around too (was the old mainline ath6kl path).
 WFW="${WFW_DIR:-$REPO_DIR/firmware/ath6k/AR6014}"
@@ -115,10 +115,14 @@ say "static busybox (armel)"
 command -v arm-linux-gnueabi-gcc >/dev/null || {
 	echo "arm-linux-gnueabi-gcc not found" >&2; exit 1; }
 
-BB=/root/p3ds/tools/busybox-armel
+# Build busybox into the repo's tools/ dir by default (writable by the
+# current user); override with BBDIR.  This used to be hardcoded to
+# /root/p3ds/tools, which only worked when run as root.
+BBDIR="${BBDIR:-$PORT/../tools}"
+BB="$BBDIR/busybox-armel"
 if [ ! -x "$BB" ]; then
-	mkdir -p /root/p3ds/tools
-	cd /root/p3ds/tools
+	mkdir -p "$BBDIR"
+	cd "$BBDIR"
 	[ -d busybox-1.36.1 ] || tar xjf "$SRC/busybox-1.36.1.tar.bz2"
 	cd busybox-1.36.1
 	make ARCH=arm CROSS_COMPILE=arm-linux-gnueabi- defconfig >/dev/null

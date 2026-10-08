@@ -2,7 +2,7 @@
 # apply-arm9linuxfw-port.sh - give Linux a writable SD card
 #
 # Usage: apply-arm9linuxfw-port.sh [arm9linuxfw-tree]
-#        (default: /root/p3ds/src/arm9linuxfw)
+#        (default: $HOME/p3ds/src/arm9linuxfw)
 #
 # Replaces source/vdev/sdcard.c with the port's version, which implements
 # VIRTIO_BLK_T_OUT (writes) and stops advertising VIRTIO_BLK_F_RO, so Linux
@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-FW="${1:-/root/p3ds/src/arm9linuxfw}"
+FW="${1:-$HOME/p3ds/src/arm9linuxfw}"
 PORT="$(cd "$(dirname "$0")/.." && pwd)"
 
 die() { echo "error: $*" >&2; exit 1; }

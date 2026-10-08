@@ -32,11 +32,11 @@ download() {
 }
 
 download org/smali smali 2.5.2
+download org/antlr antlr 3.5.2
 download org/smali util 2.5.2
 download org/smali dexlib2 2.5.2
-download org/smali antlr 2.5.2
-download org/smali antlr-runtime 2.5.2
-download org/smali stringtemplate 2.5.2
+download org/antlr antlr-runtime 3.5.2
+download org/antlr stringtemplate 3.2.1
 download com/google/guava guava 27.0.1-jre
 download com/beust jcommander 1.72
 

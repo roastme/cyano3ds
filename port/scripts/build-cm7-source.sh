@@ -27,7 +27,7 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="$REPO/out"
-WORK=/root/p3ds
+WORK="${WORK:-$HOME/p3ds}"
 CM7_DIR="${CM7_DIR:-$WORK/cm7}"
 TARGET_OUT="$CM7_DIR/out/target/product/nintendo3ds"
 SYSDIR="$TARGET_OUT/system"

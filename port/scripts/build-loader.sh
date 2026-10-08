@@ -14,8 +14,8 @@
 
 set -euo pipefail
 
-SRC="${1:-/root/p3ds/src}"
-OUT="${2:-/root/p3ds/dist}"
+SRC="${1:-$HOME/p3ds/src}"
+OUT="${2:-$HOME/p3ds/dist}"
 PORT="$(cd "$(dirname "$0")/.." && pwd)"
 export CC=arm-none-eabi-gcc
 

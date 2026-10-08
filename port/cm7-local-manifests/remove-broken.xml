@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Local manifest for the CM7.2 (gb-release-7.2) sync.
+
+  Two upstream projects are permanently gone from GitHub and abort `repo sync`:
+
+    * CyanogenMod/android_external_svox   — removed (DMCA takedown).
+    * CyanogenMod/android_hardware_ti_wpan — no gb-release-7.2 branch.
+
+  Excluding them lets the sync complete.  AOSP's svox is staged into
+  external/svox afterwards (see port/scripts/stage-svox.sh); the TI wpan
+  hardware package is not needed for the 3DS port.
+-->
+<manifest>
+  <remove-project name="CyanogenMod/android_external_svox" />
+  <remove-project name="CyanogenMod/android_hardware_ti_wpan" />
+</manifest>

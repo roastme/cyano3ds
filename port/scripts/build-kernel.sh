@@ -2,7 +2,7 @@
 # build-kernel.sh - configure and build the Cyano3DS (CM7.2) capable 3DS kernel
 #
 # Usage: build-kernel.sh [kernel-tree] [dist-dir]
-#        defaults: /root/p3ds/src/linux-3ds  /root/p3ds/dist
+#        defaults: $HOME/p3ds/src/linux-3ds  $HOME/p3ds/dist
 #
 # Produces (in dist/):
 #   zImage                    - Linux kernel, loaded by firm_linux_loader
@@ -12,8 +12,8 @@
 
 set -euo pipefail
 
-KD="${1:-/root/p3ds/src/linux-3ds}"
-OUT="${2:-/root/p3ds/dist}"
+KD="${1:-$HOME/p3ds/src/linux-3ds}"
+OUT="${2:-$HOME/p3ds/dist}"
 PORT="$(cd "$(dirname "$0")/.." && pwd)"
 DEF=nintendo3ds_android_defconfig
 

@@ -2,7 +2,7 @@
 # apply-kernel-port.sh - apply the Cyano3DS (CM7.2-on-Nintendo-3DS) kernel port
 #
 # Usage: apply-kernel-port.sh [kernel-tree]
-#        (default kernel tree: /root/p3ds/src/linux-3ds)
+#        (default kernel tree: $HOME/p3ds/src/linux-3ds)
 #
 # Everything this script touches lives in this repository under port/ and
 # src/android-staging/ so that the port stays reviewable and re-appliable on a
@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-KD="${1:-/root/p3ds/src/linux-3ds}"
+KD="${1:-$HOME/p3ds/src/linux-3ds}"
 PORT="$(cd "$(dirname "$0")/.." && pwd)"   # <repo>/port
 SRC="$(cd "$PORT/../src" && pwd)"           # <repo>/src
 
