@@ -51,9 +51,10 @@ Usage:
 """
 
 import pathlib
+import os
 import sys
 
-KD = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "/root/p3ds/src/linux-3ds")
+KD = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/p3ds/src/linux-3ds"))
 ATH = KD / "drivers" / "net" / "wireless" / "ath" / "ath6kl"
 WMI_C = ATH / "wmi.c"
 INIT_C = ATH / "init.c"

@@ -819,7 +819,8 @@ fi
 # ---------------------------------------------------------------------------
 # Legacy prebuilt boot stage: the archived flavor's init binary plus the init.rc that
 # legacy/build-android.sh patched for the 3DS (mounts removed, fb symlink, props).
-# If they are not there, the initramfs still works as a bring-up image.
+# If they are not there the script fails (C-19); set ALLOW_NO_ANDROID=1 to
+# build a bring-up-only initramfs anyway.
 # ---------------------------------------------------------------------------
 AD="$PORT/../out/$ADIR"
 if [ -x "$AD/init" ] && [ -f "$AD/init.rc" ]; then
@@ -1206,8 +1207,13 @@ PUBLISHER
 	grep -n 'ro.secure\|ro.debuggable\|allow.mock\|adb.enable' "$ROOT/default.prop" | sed 's/^/    default.prop: /'
 	: > "$ROOT/init.nintendo3ds.rc"
 	echo "    Android boot stage: /init.rc, /default.prop, /bin/android-init"
+elif [ "${ALLOW_NO_ANDROID:-0}" = 1 ]; then
+	echo "    WARNING: no Android boot stage ($AD missing); ALLOW_NO_ANDROID=1 set, building a bring-up-only initramfs" >&2
 else
-	echo "    no Android boot stage (run legacy/build-android.sh)"
+	echo "mkinitramfs.sh: no Android boot stage at $AD." >&2
+	echo "                Build CM7 first: bash port/scripts/cm7-rootless.sh package" >&2
+	echo "                (or set ALLOW_NO_ANDROID=1 for a bring-up-only initramfs)." >&2
+	exit 1
 fi
 
 # ---------------------------------------------------------------------------
@@ -2676,7 +2682,16 @@ GBCXML
 			ok=0; bad=0; skip=0
 			total=$(ls /system/framework/*.jar /system/app/*.apk 2>/dev/null | wc -l)
 			i=0
-			for src in /system/framework/*.jar /system/app/*.apk; do
+			# Optimize the boot-classpath jars first, in BOOTCLASSPATH order.  A
+			# plain glob runs them alphabetically, so am.jar, bouncycastle.jar,
+			# android.policy.jar ... ran before core.jar had a cache, and their
+			# dexopt aborted (the NoClassDefFoundError path SIGSEGVs).  The
+			# later glob entries then skip the BCP jars as "already valid".
+			BCP_FIRST=""
+			for b in core bouncycastle ext framework android.policy services; do
+				BCP_FIRST="$BCP_FIRST /system/framework/$b.jar"
+			done
+			for src in $BCP_FIRST /system/framework/*.jar /system/app/*.apk; do
 				[ -f "$src" ] || continue
 				i=$((i+1))
 				base=$(basename "$src")
@@ -3001,7 +3016,17 @@ say "checking the busybox applets the init script uses"
 # episode).  Fail the build instead.
 NEEDED="$INIT_APPLETS"
 APPLET_LIST=/tmp/busybox-applets-$$
-"$BB" --list > "$APPLET_LIST" 2>/dev/null || true
+# The busybox is armel: on an x86 host it only runs under qemu-user (the
+# qemu-user-static package in BUILD.md step 0).  Without this, --list fails
+# silently and every applet looks missing.
+BB_RUN=("$BB")
+if ! "$BB" --list >/dev/null 2>&1; then
+	command -v qemu-arm-static >/dev/null || {
+		echo "FATAL: cannot run $BB on this host and qemu-arm-static is not installed" >&2
+		exit 1; }
+	BB_RUN=(qemu-arm-static "$BB")
+fi
+"${BB_RUN[@]}" --list > "$APPLET_LIST" 2>/dev/null || true
 for a in $NEEDED; do
 	# NOTE: do *not* pipe --list into `grep -q`: with pipefail, grep's early
 	# exit closes the pipe, busybox --list dies of SIGPIPE and the pipeline

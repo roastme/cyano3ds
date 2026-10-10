@@ -45,6 +45,7 @@ Idempotent.
 """
 
 import sys
+import os
 import pathlib
 
 
@@ -62,7 +63,7 @@ def replace_once_or_applied(s, old, new, what):
 
 def main():
     kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1
-                      else "/root/p3ds/src/linux-3ds")
+                      else os.path.expanduser("~/p3ds/src/linux-3ds"))
     cfg = kd / "drivers/net/wireless/ath/ath6kl/cfg80211.c"
     wmi = kd / "drivers/net/wireless/ath/ath6kl/wmi.c"
     for p in (cfg, wmi):

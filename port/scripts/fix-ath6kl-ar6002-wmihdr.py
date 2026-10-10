@@ -28,6 +28,7 @@ field.  AR6003/AR6004 keep the 6-byte header.  Idempotent.
 """
 
 import sys
+import os
 import pathlib
 
 
@@ -45,7 +46,7 @@ def replace_once(s, old, new, what):
 
 def main():
     kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1
-                      else "/root/p3ds/src/linux-3ds")
+                      else os.path.expanduser("~/p3ds/src/linux-3ds"))
     wmi = kd / "drivers/net/wireless/ath/ath6kl/wmi.c"
     txrx = kd / "drivers/net/wireless/ath/ath6kl/txrx.c"
     for p in (wmi, txrx):

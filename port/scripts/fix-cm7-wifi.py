@@ -30,10 +30,11 @@
 # Idempotent: safe to run repeatedly.
 
 import pathlib
+import os
 import re
 import sys
 
-CM7_DIR = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "/root/p3ds/cm7")
+CM7_DIR = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/p3ds/cm7"))
 WIFI_C = CM7_DIR / "hardware" / "libhardware_legacy" / "wifi" / "wifi.c"
 
 MARK = "[3ds]"

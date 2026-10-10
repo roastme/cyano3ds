@@ -29,10 +29,17 @@ export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST:-3ds}"
 cd "$KD"
 
 # ---------------------------------------------------------------------------
-# One-time: derive the Android defconfig from linux-3ds' nintendo3ds_defconfig
+# The committed defconfig is the source of truth.  Copy it into the kernel
+# tree; never copy a generated one back over the tracked file (C-8).
 # ---------------------------------------------------------------------------
-if [ ! -f "arch/arm/configs/$DEF" ]; then
-	echo "==> generating arch/arm/configs/$DEF"
+PORT_DEF="$PORT/kernel/configs/$DEF"
+if [ -f "$PORT_DEF" ]; then
+	cp "$PORT_DEF" "arch/arm/configs/$DEF"
+	echo "==> using committed $PORT_DEF"
+elif [ ! -f "arch/arm/configs/$DEF" ]; then
+	# No committed defconfig yet: derive one from linux-3ds' nintendo3ds_defconfig.
+	# The result goes to $OUT; review it and commit it under port/kernel/configs/.
+	echo "==> generating arch/arm/configs/$DEF (no committed defconfig found)"
 	make nintendo3ds_defconfig >/dev/null
 
 	# Android userspace interfaces
@@ -61,9 +68,10 @@ if [ ! -f "arch/arm/configs/$DEF" ]; then
 	make olddefconfig >/dev/null
 	make savedefconfig >/dev/null
 	cp defconfig "arch/arm/configs/$DEF"
-	mkdir -p "$PORT/kernel/configs"
-	cp defconfig "$PORT/kernel/configs/$DEF"
-	echo "==> saved $DEF (also copied to port/kernel/configs/)"
+	mkdir -p "$OUT"
+	cp defconfig "$OUT/$DEF.generated"
+	echo "==> generated $OUT/$DEF.generated"
+	echo "    review it, then: cp $OUT/$DEF.generated $PORT_DEF"
 fi
 
 # ---------------------------------------------------------------------------
@@ -74,6 +82,17 @@ make "$DEF" >/dev/null
 
 # Keep the port's own options enabled even when an older generated defconfig is
 # already on disk (the defconfig is only generated once, above).
+# Display and clock options the generator used to add.  CTR_LCD_FB depends on
+# FB, and a committed defconfig without these lines silently drops the LCD
+# driver (C-8 change), so they are enforced here too.
+scripts/config --enable  FB                   \
+	       --enable  FRAMEBUFFER_CONSOLE  \
+	       --enable  FB_CFB_FILLRECT      \
+	       --enable  FB_CFB_COPYAREA      \
+	       --enable  FB_CFB_IMAGEBLIT     \
+	       --enable  COMMON_CLK           \
+	       --enable  ANDROID_LEGACY_DRIVERS \
+	       --enable  STAGING
 scripts/config --enable  ANDROID_ASHMEM       \
 	       --enable  ANDROID_LOGGER       \
 	       --enable  ANDROID             \

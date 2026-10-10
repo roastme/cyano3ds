@@ -24,6 +24,7 @@ For TARGET_TYPE_AR6002 only.  Idempotent, and repairs the old placement.
 """
 
 import sys
+import os
 import pathlib
 
 
@@ -33,7 +34,7 @@ def die(msg):
 
 def main():
     kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1
-                      else "/root/p3ds/src/linux-3ds")
+                      else os.path.expanduser("~/p3ds/src/linux-3ds"))
     ath = kd / "drivers/net/wireless/ath/ath6kl"
     cfg = ath / "cfg80211.c"
     wmi_c = ath / "wmi.c"

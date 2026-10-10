@@ -11,9 +11,10 @@ a store through address 0x8 one instruction after __ARM_NR_set_tls).
 Both insertions are anchored on unambiguous text and are idempotent.
 """
 import pathlib
+import os
 import sys
 
-kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "/root/p3ds/src/linux-3ds")
+kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/p3ds/src/linux-3ds"))
 p = kd / "arch/arm/include/asm/tls.h"
 s = p.read_text()
 

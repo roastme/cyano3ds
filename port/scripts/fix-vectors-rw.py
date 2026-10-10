@@ -22,9 +22,10 @@ correct one.  Force it for ARCH_CTR.
 Idempotent.
 """
 import pathlib
+import os
 import sys
 
-kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "/root/p3ds/src/linux-3ds")
+kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/p3ds/src/linux-3ds"))
 p = kd / "arch/arm/mm/mmu.c"
 s = p.read_text()
 

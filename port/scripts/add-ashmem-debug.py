@@ -15,9 +15,10 @@ every failing path with the errno; the kernel log will then say which one it is
 Idempotent.  Remove this step once bring-up is done.
 """
 import pathlib
+import os
 import sys
 
-kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "/root/p3ds/src/linux-3ds")
+kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/p3ds/src/linux-3ds"))
 p = kd / "drivers/staging/android/ashmem.c"
 s = p.read_text()
 

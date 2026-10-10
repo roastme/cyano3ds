@@ -11,27 +11,33 @@ kernel tree — must live on a Linux filesystem**, not on NTFS — a checkout on
 
 ## 0. Layout and prerequisites
 
-Pick these directories and use them for every step below. All scripts accept
-explicit paths — pass them every time, because the script defaults point at
-different places (`$HOME/p3ds/dist` for the kernel/loader/initramfs,
-`<repo>/out` for the CM7 packaging and the card staging) and mixing defaults
-leaves the artifacts scattered so `mksd.sh` reports them missing.
+Pick these directories and use them for every step below. Every script takes
+its paths from the environment or its arguments, and the defaults agree:
+kernel, loader and initramfs artifacts go to `$HOME/p3ds/dist` unless you pass
+an argument, and the CM7 packaging and card staging read `<repo>/out`. Pass
+`<repo>/out` explicitly for the kernel, loader and initramfs when you want
+`mksd.sh` to find them.
 
 ```bash
-REPO=~/cyano-check            # this checkout
-KDIR=~/p3ds/src/linux-3ds      # pristine linux-3ds kernel clone (see step 2)
-SRCDIR=~/p3ds/src              # small linux-3ds repos live here (see step 3)
+REPO=~/cyano3ds               # this checkout
+KDIR=~/p3ds/src/linux-3ds     # pristine linux-3ds kernel clone (see step 2)
+SRCDIR=~/p3ds/src             # small linux-3ds repos live here (see step 3)
 OUT=$REPO/out                 # every build artifact lands here
-CHROOT=$HOME/p3ds/cm12        # Ubuntu 12.04 chroot for the CM7 build (step 4)
-CM7_DIR=$CHROOT/root/p3ds/cm7 # CM7.2 source tree, inside the chroot
+CM7_DIR=~/p3ds/cm7            # CM7.2 source tree (step 4); about 90 GB with out/
+LOCAL=~/.cache/cm7-rootless   # Ubuntu 12.04 chroot + tools (step 4); about 4 GB
 ```
 
-The chroot scripts (`setup-chroot.sh`, `cr-run.sh`) need root for
-`debootstrap`/`mount`/`chroot`; they self-escalate with `sudo` when run as a
-normal user. After a WSL restart the chroot's `/proc`, `/sys`, `/dev` bind
-mounts are gone — run any `cr-run.sh` command once to re-make them (until
-you do, even `java` inside the chroot fails with a misleading `libjli.so`
-error).
+**Nothing in the build needs root.** The only root step is installing the host
+packages below with `apt`. The CM7 chroot runs under `proot` (fake root) and
+its first debootstrap stage under `fakeroot`, so `out/` and the source tree
+stay owned by your user. `port/scripts/cm7-rootless.sh` does the whole CM7
+flow, including `run 'cmd'` for a command in the chroot. The old sudo-based
+`cr-run.sh` is removed, and `setup-chroot.sh` is a thin wrapper around it. After a WSL restart, nothing
+needs re-mounting: the bind mounts are made per command.
+
+Run `bash port/scripts/check-deps.sh <stage>` before a stage to see every
+missing tool with its apt package name. The stage names are `kernel`,
+`loader`, `initramfs`, `sd` and `cm7`.
 
 Rough build times: kernel minutes (longer with a cold ccache), FIRM and
 initramfs a few minutes each, CM7.2 packaging a few minutes. A full CM7.2
@@ -44,19 +50,28 @@ Host packages (Ubuntu):
 sudo apt-get install -y --no-install-recommends \
     build-essential bc bison flex libssl-dev libncurses-dev libelf-dev \
     device-tree-compiler u-boot-tools \
-    gcc-arm-linux-gnueabi gcc-arm-none-eabi \
+    gcc-arm-linux-gnueabi binutils-arm-linux-gnueabi libgcc-13-dev-armel-cross \
+    gcc-arm-none-eabi binutils-arm-none-eabi libnewlib-arm-none-eabi \
     qemu-user-static \
     pkg-config unzip zip wget curl cpio rsync kmod zstd lz4 \
-    python3 python3-pip python3-venv dosfstools mtools parted \
-    ccache git file xxd \
+    python3 python3-venv dosfstools mtools parted \
+    ccache git file xxd e2fsprogs fakeroot proot fuse2fs \
     default-jre-headless
 ```
 
 - The kernel uses `arm-linux-gnueabi` (armel), matching linux-3ds' own CI.
+  On Ubuntu 24.04 the compiler is `gcc-13-arm-linux-gnueabi`, and its builtin
+  headers come from `libgcc-13-dev-armel-cross`. Without those headers the
+  kernel fails with `<linux/types.h>` errors. `check-deps.sh kernel` reports
+  this.
 - The bare-metal ARM9/ARM11 firmware uses `arm-none-eabi`.
-- `firmtool` produces the `.firm` payload. `build-loader.sh` installs it
-  automatically (`pip3 install firmtool`); you can also pre-install it with
-  `pip3 install --break-system-packages firmtool`.
+- `firmtool` produces the `.firm` payload. `build-loader.sh` builds it from
+  its git repo (the upstream loader's Dockerfile does the same) into a private
+  venv under `$SRCDIR/.venv-firmtool`. The package is not on PyPI under that
+  name, so there is nothing to install by hand. Override the source with
+  `FIRMTOOL_REPO=`.
+- `python3-venv` is required for that venv. The old `--break-system-packages`
+  install is gone.
 - `default-jre-headless` + `zip` are for `PortHelper` (step 5): without Java
   the initramfs still builds, but the keep-awake helper is skipped and the
   screen will time out on device.
@@ -153,36 +168,34 @@ OpenJDK 6, GNU make 3.81, Python 2.7 and gcc 4.6, plus the CM7.2 tree synced
 from `gb-release-7.2`. See [docs/CM7.md](CM7.md) for the full recipe and the
 build bugs that had to be fixed.
 
-Once the chroot and the CM7.2 tree (`$CM7_DIR`) exist, install the port's
-device tree, build, then package (run the first two inside the chroot, the
-third back on the host):
-
-The chroot and the CM7.2 tree are one-time, cached state — `setup-chroot.sh`
-skips them once they exist.  The three flow scripts below are idempotent:
-re-run them after pulling any port update, or the build may pick up a stale
-device tree / product files.
+`cm7-rootless.sh` runs every CM7 step without root. Each stage is re-runnable,
+and its output goes to `<repo>/out/cm7-logs/<stage>.log`:
 
 ```bash
-bash port/scripts/setup-chroot.sh              # one-time: create the 12.04 chroot + sync
-bash port/scripts/cleanup-cm7-tree.sh "$CM7_DIR"  # remove stale device trees
-bash port/scripts/apply-cm7-device.sh "$CM7_DIR"   # install device/nintendo3ds
-bash port/scripts/stage-svox.sh "$CM7_DIR"         # stage AOSP svox (CM fork is gone from GitHub)
-# then, in the CM7 tree (inside the chroot):
-#   . build/envsetup.sh && lunch cyanogen_nintendo3ds-userdebug && make droidcore -j2
-# (NOT brunch nintendo3ds — see docs/CM7.md: TARGET_NO_KERNEL=true means
-#  brunch/bacon can never work; droidcore is the correct target.
-#  `lunch cyanogen_nintendo3ds-userdebug` selects the product — without it
-#  droidcore builds the default `generic` product and the packaging step
-#  can't find out/target/product/nintendo3ds/.)
-# Run the build in the foreground of a long-running shell — background
-# builds may be killed when the launching session exits on some systems.
-
-# the build runs as root inside the chroot, so hand the outputs back before
-# packaging (build-cm7-source.sh edits files under out/):
-chown -R "$USER" "$CM7_DIR/out"
-CM7_DIR="$CM7_DIR" bash port/scripts/build-cm7-source.sh
-# -> out/android/{system,data}.img, out/cm7-init/
+bash port/scripts/cm7-rootless.sh                  # tools, bootstrap, chroot, sync (once; resumes)
+bash port/scripts/cm7-rootless.sh port             # device tree, svox staging (re-run after a port update)
+bash port/scripts/cm7-rootless.sh build            # lunch + make droidcore -j2 (hours)
+bash port/scripts/cm7-rootless.sh package          # out/android/{system,data}.img, out/cm7-init/
+bash port/scripts/cm7-rootless.sh run 'cmd'        # any command inside the 12.04 chroot
 ```
+
+- `port` and `build` are idempotent: re-run `port` after pulling any port
+  update, or the build may pick up a stale device tree.
+- Run `build` in the foreground of a long-running shell. Background builds
+  may be killed when the launching session exits on some systems.
+- The target is `droidcore` with `lunch cyanogen_nintendo3ds-userdebug`
+  (see [CM7.md](CM7.md)). Without the `lunch` the build produces the generic
+  product and `package` cannot find `out/target/product/nintendo3ds/`.
+- **Disk.** The chroot and tools need about 4 GB on local disk (debootstrap
+  refuses a FUSE target). The source tree plus `out/` need about 90 GB, put in
+  `CM7_DIR`. If that drive cannot hold a tree (FUSE mounts and NTFS have no
+  exec bits), set `CM7_IMAGE=/path/cm7.img` and `CM7_MNT=/path/mnt`: the script
+  creates a sparse ext4 image and mounts it with `fuse2fs -o fakeroot`.
+- `JOBS` (repo sync parallelism, default 3) and `BUILD_J` (make, default 2)
+  are the knobs. GitHub rate-limits high `JOBS` values.
+- The repo sync runs on the host with the current `repo` launcher (Python 3).
+  The gb-release-7.2 manifest is a plain manifest and does not need the old
+  Python 2 `repo` v2.7, and the chroot has no `repo` tool.
 
 `build-cm7-source.sh` always writes into `<repo>/out` (that is also where
 `mkinitramfs.sh` looks for `cm7-init/` in the next step, so no path argument
@@ -258,14 +271,14 @@ The details, including which NWM revision is needed, are in
 | `mkinitramfs.sh` cannot find `busybox-1.36.1.tar.bz2` | Step 0 download missing — fetch it into `src/`. |
 | `could not build porthelper.jar` warning | Java/smali/zip missing — install `default-jre-headless` + `zip`, fetch `tools/smali.jar` (step 0). The build still completes, but the screen will time out on device. |
 | `no .../stub_code.bin (ath6k will fail its firmware load)` | No Wi-Fi blobs — expected without step 7. The build still boots; only Wi-Fi is missing. To silence it, provide `NWM_DIR` or `firmware/ath6k/AR6002/nwm/`. |
-| `mksd.sh: missing ... (run the build scripts first)` | Artifacts went to `/root/p3ds/dist` (script defaults) instead of `<repo>/out` — re-run steps 2, 3, 5 with `"$OUT"` set to `$REPO/out`. |
+| `mksd.sh: missing ... (run the build scripts first)` | The kernel, loader and initramfs artifacts went to `~/p3ds/dist` (the script defaults). Re-run steps 2, 3 and 5 with `"$OUT"` set to `$REPO/out`. |
 | Kernel checkout on `/mnt/c` fails with odd filename errors | NTFS limitation — move the checkout and `$KDIR` onto a Linux filesystem (step 0). |
 | `debootstrap`: `Release signed by unknown key (key id 40976EAF437D05B5)` | The host's `ubuntu-archive-keyring` no longer trusts the 2012-era precise signing key. Re-add the old key to `/usr/share/keyrings/ubuntu-archive-keyring.gpg` (or use `debootstrap --no-check-gpg`). |
-| `repo: error: Python 2 is no longer supported` / `python3: No such file` | The chroot is Python 2.7 but the latest `repo` needs Python 3. `setup-chroot.sh` installs v2.7 and sets `REPO_REV=v2.7`; if you installed `repo` by hand, fetch the v2.7 tag and export `REPO_REV=v2.7`. |
-| `dpkg: error: unknown option --add-architecture` | Removed from `setup-chroot.sh` — precise's dpkg 1.16 predates it and it is unnecessary. |
+| `repo: error: Python 2 is no longer supported` | The sync must run on the host with Python 3 (`cm7-rootless.sh sync`). Do not run `repo` inside the Python 2 chroot. |
+| `dpkg: error: unknown option --add-architecture` | Not used any more: precise's dpkg 1.16 predates it and the 32-bit packages install without it. |
 | `No rule to make target external/svox/…` | The CM svox fork is gone from GitHub. Run `port/scripts/stage-svox.sh` after the sync (and after `cleanup-cm7-tree.sh`, which no longer deletes it). |
 | `"common_full.mk" does not exist` / `common.mk: No such file` | `cleanup-cm7-tree.sh` used to delete the `common_*.mk`/`themes*.mk` files the product inherits. Fixed — they are kept now. |
-| `ld: cannot find -lstdc++` / `-lz` (32-bit host tools) | precise has no 32-bit libstdc++/zlib dev packages. `setup-chroot.sh` now creates the `.so` symlinks. |
+| `ld: cannot find -lstdc++` / `-lz` (32-bit host tools) | precise has no 32-bit libstdc++/zlib dev packages. The `chroot` stage of `cm7-rootless.sh` creates the `.so` symlinks. |
 | `sh: gperf: not found` | `gperf` is in the chroot's package list now. |
-| `PermissionError: …/out/.../build.prop` | The build runs as root in the chroot, so `out/` is root-owned. `chown -R $USER $CM7_DIR/out` before `build-cm7-source.sh`. |
+| `PermissionError: …/out/.../build.prop` | Not expected any more: the build runs under `proot -0`, which keeps `out/` owned by your user. If you see it, the tree was created by an older root build; `sudo chown -R $USER $CM7_DIR/out` once. |
 | `Don't have a product spec for: 'cyanogen_nintendo3ds'` / builds `generic` | No `lunch` was run. Use `lunch cyanogen_nintendo3ds-userdebug` before `make droidcore`. |
