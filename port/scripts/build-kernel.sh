@@ -95,6 +95,8 @@ scripts/config --enable  FB                   \
 	       --enable  STAGING
 scripts/config --enable  ANDROID_ASHMEM       \
 	       --enable  ANDROID_LOGGER       \
+	       --enable  ANDROID_ALARM_DEV    \
+	       --enable  ANDROID_FB_WAIT      \
 	       --enable  ANDROID             \
 	       --enable  ANDROID_BINDER_IPC  \
 	       --disable ANDROID_BINDERFS    \
@@ -103,6 +105,10 @@ scripts/config --enable  ANDROID_ASHMEM       \
 	       --enable  CTR_CPUFREQ         \
 	       --enable  CTR_EXTRAPAD        \
 	       --enable  CTR_SND             \
+	       --enable  CTR_LID             \
+	       --enable  CTR_CAM             \
+	       --enable  SUSPEND             \
+	       --enable  HOTPLUG_CPU         \
 	       --enable  SOUND               \
 	       --enable  SND                 \
 	       --enable  SND_PCM             \
@@ -246,6 +252,8 @@ grep -c "CONFIG_ANDROID_BINDER_IPC=y" .config | sed 's/^/  CONFIG_ANDROID_BINDER
 grep -c "CONFIG_CTR_LCD_FB=y" .config | sed 's/^/  CONFIG_CTR_LCD_FB=y : /'
 grep -c "CONFIG_CTR_EXTRAPAD=y" .config | sed 's/^/  CONFIG_CTR_EXTRAPAD=y : /'
 grep -c "CONFIG_CTR_SND=y" .config | sed 's/^/  CONFIG_CTR_SND=y : /'
+grep -c "CONFIG_CTR_LID=y" .config | sed 's/^/  CONFIG_CTR_LID=y : /'
+grep -c "CONFIG_CTR_CAM=y" .config | sed 's/^/  CONFIG_CTR_CAM=y : /'
 grep -c "CONFIG_SND_PCM=y" .config | sed 's/^/  CONFIG_SND_PCM=y : /'
 grep -c "CONFIG_CFG80211=y" .config | sed 's/^/  CONFIG_CFG80211=y : /'
 grep -c "CONFIG_CFG80211_WEXT=y" .config | sed 's/^/  CONFIG_CFG80211_WEXT=y : /'

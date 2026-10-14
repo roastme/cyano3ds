@@ -51,6 +51,7 @@
 #include <linux/regmap.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/workqueue.h>
 #include <sound/core.h>
 #include <sound/initval.h>
 #include <sound/pcm.h>
@@ -153,11 +154,28 @@
 #define CDC_DAC_L_VOLUME_CTRL	CDC(0, 65)
 #define CDC_DAC_R_VOLUME_CTRL	CDC(0, 66)
 
-/* Codec calibration defaults (launch-day o3DS values, from libn3ds hw_cal.c). */
-#define DRIVER_GAIN_HP		0	/* 0 dB */
-#define DRIVER_GAIN_SP		1	/* 12 dB */
-#define ANALOG_VOLUME_HP	0	/* 0 dB */
-#define ANALOG_VOLUME_SP	7	/* -3.5 dB */
+/*
+ * Codec calibration: the neutral values Android3DS/Octoblimp's ctr_csnd.c
+ * (ported from Aurora3DS's Audio11.c, which is verified to make sound on this
+ * hardware) uses instead of the per-console HWCAL block.
+ */
+#define DRIVER_GAIN_HP		1
+#define DRIVER_GAIN_SP		1
+#define ANALOG_VOLUME_HP	0
+#define ANALOG_VOLUME_SP	0
+
+/* I2S1_CNT bit 12: microphone timing (needed by the MIC block) */
+#define I2S1_MIC_TIMING		BIT(12)
+
+/*
+ * Both I2S lines run at 32.73 kHz, as in Octoblimp (N3DS_MIC_CLOCK_32K): the
+ * microphone's sample clock is a divider of it, and with line 2 at 47.61 kHz
+ * the MIC block delivered half the documented rate.  The CSND resamples
+ * every stream to whatever line 2 runs at, so playback works either way.
+ */
+static bool i2s2_47k;
+module_param(i2s2_47k, bool, 0444);
+MODULE_PARM_DESC(i2s2_47k, "run the CSND I2S line at 47.61 kHz instead of 32.73 kHz");
 
 /* ------------------------------------------------------------------------- */
 /* Codec helpers                                                             */
@@ -201,56 +219,6 @@ static int cdc_wait_mask(struct regmap *map, u16 pr, u8 val, u8 mask)
 	return 0;
 }
 
-/* Write an array of big-endian 16-bit coefficients starting at (page, reg). */
-static int cdc_write_be16(struct regmap *map, int page, int reg,
-			  const s16 *vals, int n)
-{
-	u8 *buf;
-	int i, err;
-
-	buf = kmalloc(n * 2, GFP_KERNEL);
-	if (!buf)
-		return -ENOMEM;
-	for (i = 0; i < n; i++) {
-		buf[2 * i] = (u16)vals[i] >> 8;
-		buf[2 * i + 1] = (u16)vals[i] & 0xff;
-	}
-	err = regmap_raw_write(map, CDC(page, reg), buf, n * 2);
-	kfree(buf);
-	return err;
-}
-
-/* Filter coefficient tables (default calibration, logical values). */
-static const s16 filter_sp32[15] = {
-	32767, -27535, 22413, 30870, -29096,
-	-14000, 30000, -14000, 0, 0,
-	32736, -16368, 0, 16352, 0,
-};
-static const s16 filter_sp47[15] = {
-	32767, -28995, 25277, 31456, -30200,
-	-14402, 30000, -14402, 0, 0,
-	32745, -16372, 0, 16361, 0,
-};
-static const s16 filter_hp32[15] = {
-	32767, 0, 0, 0, 0,
-	32767, 0, 0, 0, 0,
-	32736, -16368, 0, 16352, 0,
-};
-static const s16 filter_hp47[15] = {
-	32767, 0, 0, 0, 0,
-	32767, 0, 0, 0, 0,
-	32745, -16372, 0, 16361, 0,
-};
-/* CdcPrbP25Filters: a first-order IIR followed by five biquads. */
-static const s16 filter_free_iir[3] = { 32767, 0, 0 };
-static const s16 filter_free_b[25] = {
-	-12959, -8785, 32767, 8785, 12959,
-	-12959, -8785, 32767, 8785, 12959,
-	-12959, -8785, 32767, 8785, 12959,
-	32767, 0, 0, 0, 0,
-	32767, 0, 0, 0, 0,
-};
-
 static int ctr_set_i2s_freq(struct regmap *map, int line, bool khz47)
 {
 	if (line == 1) {
@@ -271,101 +239,91 @@ static void ctr_pdn_mclk(bool enable)
 }
 
 /*
- * Codec bring-up.  Runs from ctr_tsc's probe (before the touchscreen child),
- * so a soft reset here cannot clobber the touchscreen configuration.
+ * Codec bring-up.  Runs from ctr_tsc's probe, after its chip reset and
+ * before the touchscreen child is populated.
+ *
+ * This is the analog output sequence of Android3DS/Octoblimp's ctr_csnd.c
+ * codec_init(), a one-for-one port of Aurora3DS's Audio11.c (itself from
+ * profi200's libn3ds codec.c), which is verified to produce sound on this
+ * hardware.  The order of the writes is load-bearing.  Compared with this
+ * driver's earlier sequence it does no second (CTR) soft reset, uploads no EQ
+ * coefficients, does not touch p100.49/p100.123, runs I2S line 2 at
+ * 32.73 kHz and uses Octoblimp's speaker/headphone gains.
  */
 int ctr_snd_codec_init(struct regmap *map)
 {
-	u8 vendor, rev, hpval;
+	u8 id = 0, rev = 0, hpval;
 	int err;
 	void __iomem *i2s;
 
-	pr_info("initialising TSC2117/AIC3010 audio codec\n");
+	pr_info("initialising TSC2117/AIC3010 audio codec (Octoblimp sequence)\n");
 
 	/* Turn the codec MCLK on (the same bit ctr_tsc already sets). */
 	ctr_pdn_mclk(true);
 
-	/* CTR-specific software reset. */
-	err = cdc_w(map, CDC_SOFT_RST_CTR, 1);
+	err = cdc_r(map, CDC_0_2, &id);
+	if (!err)
+		err = cdc_r(map, CDC_0_3, &rev);
 	if (err)
 		return err;
-	msleep(40);
+	pr_info("codec vendor/rev %02x/%02x\n", id, rev);
+	/*
+	 * Octoblimp refuses to program a codec whose ID reads all-0 or all-1
+	 * (a dead SPI link).  This driver only warns: the 3Beans emulator does
+	 * not model the ID registers but does gate CSND output on the I2S
+	 * setup below.  Real consoles read 11/36 here.
+	 */
+	if ((id == 0x00 && rev == 0x00) || (id == 0xff && rev == 0xff))
+		pr_warn("codec ID/rev reads all-0x%02x: SPI link to the codec not working? programming it anyway\n",
+			id);
 
 	/* Headset detection timing + reset the detection state machine. */
 	cdc_w(map, CDC_100_67, 0x11);
 	cdc_mask(map, CDC_101_119, 1, 1);
-
 	/* Don't force the GPIO pins; VREF on; PLL on. */
 	cdc_mask(map, CDC_GPI1_GPI2_PIN_CTRL, 0x66, 0x66);
 	cdc_w(map, CDC_101_122, 1);
 	cdc_mask(map, CDC_100_34, 0x18, 0x18);
 
-	/* I2S mute/volume control (part of the codec module's sound setup). */
-	cdc_mask(map, CDC_100_49, 0x44, 0x44);
-
-	/*
-	 * Headset: force the speaker output.  We cannot easily read the jack
-	 * GPIO from here; speakers are what matters for bring-up and the
-	 * codec's automatic switching can be enabled later.
-	 */
+	/* Force the speaker path rather than reading the headphone-jack GPIO. */
 	cdc_mask(map, CDC_HEADSET_SEL, 0x20, 0x30);
 	cdc_mask(map, CDC_100_67, 0, 0x80);
 	cdc_mask(map, CDC_100_67, 0x80, 0x80);
 
-	/* Codec-side I2S dividers: I2S1 32 kHz, I2S2 47.6 kHz. */
+	/* Codec-side I2S dividers: line 1 32 kHz, line 2 32 kHz (or 47 kHz). */
 	ctr_set_i2s_freq(map, 1, false);
-	ctr_set_i2s_freq(map, 2, true);
+	ctr_set_i2s_freq(map, 2, i2s2_47k);
 
-	/* I2S interface setup.  Bits 12-14 are only writable while disabled. */
+	/* SoC I2S controller.  Bits 12-14 are only writable while disabled. */
 	i2s = ioremap(I2S_BASE, I2S_SIZE);
 	if (!i2s)
 		return -ENOMEM;
 	writew(0, i2s + 0);
 	writew(0, i2s + 2);
-	/* I2S1: enable | 16 MHz MCLK | 32.7 kHz | legacy volume 32 | DSP vol 0 */
-	writew(I2S2_EN | I2S2_MCLK2_16MHZ | 0 | (32 << 6), i2s + 0);
-	/* I2S2: enable | 16 MHz MCLK | 47.6 kHz  (== 0xE000) */
-	writew(I2S2_EN | I2S2_MCLK2_16MHZ | I2S2_FREQ_47KHZ, i2s + 2);
+	/* I2S1: enable | 16 MHz MCLK | 32.7 kHz | mic timing | legacy vol 32 */
+	writew(I2S2_EN | I2S2_MCLK2_16MHZ | I2S1_MIC_TIMING | (32 << 6), i2s + 0);
+	/* I2S2 (CSND): enable | 16 MHz MCLK | 32.7 kHz (47.6 kHz if asked) */
+	writew(I2S2_EN | I2S2_MCLK2_16MHZ | (i2s2_47k ? I2S2_FREQ_47KHZ : 0),
+	       i2s + 2);
+	pr_info("I2S1_CNT=0x%04x I2S2_CNT=0x%04x (line 2 at %s kHz)\n",
+		readw(i2s + 0), readw(i2s + 2), i2s2_47k ? "47.61" : "32.73");
+	iounmap(i2s);
 
-	/* Speaker driver power-up time. */
+	/* Output stage: power the DAC, unmute both lines, power the drivers. */
 	cdc_mask(map, CDC_101_17, 0x10, 0x1C);
-	/* Per-line digital volumes: write 0 dB. */
-	cdc_w(map, CDC_100_122, 0);	/* I2S1 */
-	cdc_w(map, CDC_100_120, 0);	/* I2S2 */
-	cdc_w(map, CDC_100_123, 0);	/* I2S2 (was the shutter volume) */
-
-	/* Page 9/8: I2S1 "filterFree" (kept for completeness, mute while
-	 * writing). */
-	cdc_mask(map, CDC_100_119, 0xC, 0xC);	/* mute I2S2 while writing */
-	cdc_write_be16(map, 10, 2, filter_free_iir, 3);
-	cdc_write_be16(map, 10, 12, filter_free_b, 25);
-	/* Page 12: speaker EQ (32 kHz and 47.6 kHz variants). */
-	cdc_write_be16(map, 12, 2, filter_sp32, 15);
-	cdc_write_be16(map, 12, 66, filter_sp32, 15);
-	cdc_write_be16(map, 12, 32, filter_sp47, 15);
-	cdc_write_be16(map, 12, 96, filter_sp47, 15);
-	/* Page 11: headphone EQ. */
-	cdc_write_be16(map, 11, 2, filter_hp32, 15);
-	cdc_write_be16(map, 11, 66, filter_hp32, 15);
-	cdc_write_be16(map, 11, 32, filter_hp47, 15);
-	cdc_write_be16(map, 11, 96, filter_hp47, 15);
-
-	/* Power the DAC on and wait for the flags. */
+	cdc_w(map, CDC_100_122, 0);	/* I2S1 volume 0 dB */
+	cdc_w(map, CDC_100_120, 0);	/* I2S2 volume 0 dB */
 	cdc_mask(map, CDC_100_118, 0xC0, 0xC0);
 	msleep(10);
 	cdc_wait_mask(map, CDC_100_37, 0x88, 0x88);
-
-	/* Route the DAC and unmute both I2S lines. */
 	cdc_w(map, CDC_101_10, 0xA);
+
 	cdc_mask(map, CDC_DAC_DATA_PATH_SETUP, 0xC0, 0xC0);	/* I2S1 unmute */
 	cdc_w(map, CDC_DAC_VOLUME_CTRL, 0);
 	cdc_mask(map, CDC_100_119, 0, 0xC);			/* I2S2 unmute */
 
 	/* Headphone driver.  Two vendor/revision variants exist. */
-	cdc_r(map, CDC_0_2, &vendor);
-	cdc_r(map, CDC_0_3, &rev);
-	pr_info("codec vendor/rev %02x/%02x\n", vendor, rev);
-	if ((vendor & 0xF) <= 1 && ((rev & 0x70) >> 4) <= 2)
+	if ((id & 0xF) <= 1 && ((rev & 0x70) >> 4) <= 2)
 		hpval = 0x3C;
 	else
 		hpval = 0x1C;
@@ -384,8 +342,8 @@ int ctr_snd_codec_init(struct regmap *map)
 	/* Let the headphone/speaker outputs settle. */
 	msleep(38);
 
-	iounmap(i2s);
-	pr_info("codec ready\n");
+	cdc_r(map, CDC_101_11, &id);
+	pr_info("codec ready (readback p101.11 = 0x%02x, wrote 0x%02x)\n", id, hpval);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(ctr_snd_codec_init);
@@ -430,7 +388,8 @@ static inline u32 csnd_ch_off(unsigned int ch)
  */
 static u16 csnd_sr_reg(unsigned int sample_rate)
 {
-	u32 div = 67027964u / sample_rate;
+	/* rounded: 44100 Hz -> 1520 = 44097 Hz (truncating gave 44126 Hz) */
+	u32 div = DIV_ROUND_CLOSEST(67027964u, sample_rate);
 	if (div > 0xffff)
 		div = 0xffff;
 	return (u16)(0x10000 - div);
@@ -487,6 +446,9 @@ static void csnd_play(void __iomem *base, unsigned int ch, bool playing)
 #define CTR_SND_MAX_BUFFER	(128 * 1024)
 #define CTR_SND_PERIOD_MIN	512
 #define CTR_SND_CHANNEL		0
+#define CTR_SND_OUT_REGS	5
+#define CTR_SND_OUTMON_MS	100	/* output-stage check period */
+#define CTR_SND_OUTMON_MAX	20	/* re-arms per boot */
 
 struct ctr_snd {
 	struct device *dev;
@@ -504,6 +466,12 @@ struct ctr_snd {
 	unsigned long pos;		/* last reported frame position */
 	unsigned int hw_last;		/* previous st_addr reading (frames) */
 	bool hw_live;			/* st_addr advances -> real position */
+	ktime_t hw_moved;		/* when st_addr last changed */
+	bool hw_cand;			/* st_addr rate measurement running */
+	ktime_t hw_t0;			/* ... since this time */
+	unsigned int hw_prev;		/* ... last st_addr reading (frames) */
+	u64 hw_total;			/* ... frames st_addr moved since hw_t0 */
+	bool hw_rate_warned;		/* logged a failed rate check once */
 	unsigned long diag_next;	/* jiffies of next position diagnostic */
 	int diag_left;
 	atomic_t running;
@@ -518,6 +486,39 @@ struct ctr_snd {
 	void *mono_buf;
 	dma_addr_t mono_addr;
 	unsigned int mono_bytes;
+
+	/* the codec, through ctr_tsc's regmap (the parent device) */
+	struct regmap *codec;
+
+	/* output-stage monitor (N3DS_CSND_OUTPUT_REARM) */
+	struct delayed_work outmon;
+	int out_base[CTR_SND_OUT_REGS];
+	bool out_base_ok;
+	unsigned int rearms;
+
+	/* microphone capture (N3DS_MIC_REAL) */
+	void __iomem *mic;
+	struct snd_pcm_substream *cap_ss;
+	struct hrtimer cap_timer;
+	atomic_t cap_running;
+	unsigned int cap_pos;		/* next frame written in the ALSA ring */
+	unsigned int cap_period_fill;	/* frames since the last period */
+	bool adc_frontend_done;
+	int cap_idx;			/* MIC_CNT rate divider index */
+	bool cap_idx_auto;
+	u8 cap_live;			/* which bits of a FIFO word carry samples */
+	s8 cap_shift;
+	u32 cap_in_rate;
+	u32 rs_step, rs_pos;		/* Q16 resampler */
+	s32 rs_prev;
+	bool cap_seen_data;
+	unsigned int cap_dry_ticks;
+	unsigned int cap_overruns;
+	/* the format probe over the first MIC_PROBE_WORDS words */
+	ktime_t pr_t0;
+	u32 pr_words, pr_lo_dead, pr_hi_dead, pr_same;
+	u32 pr_ones[32], pr_nsign[32], pr_eq[32];
+	bool pr_done;
 };
 
 static const struct snd_pcm_hardware ctr_snd_pcm_hw = {
@@ -687,6 +688,9 @@ static int ctr_snd_pcm_prepare(struct snd_pcm_substream *ss)
 	snd->pos = 0;
 	snd->hw_last = 0;
 	snd->hw_live = false;
+	snd->hw_moved = 0;
+	snd->hw_cand = false;
+	snd->hw_rate_warned = false;
 	return 0;
 }
 
@@ -704,6 +708,9 @@ static int ctr_snd_pcm_trigger(struct snd_pcm_substream *ss, int cmd)
 		snd->diag_left = 10;
 		hrtimer_start(&snd->timer, snd->period_time,
 			      HRTIMER_MODE_REL_SOFT);
+		if (snd->out_base_ok)
+			mod_delayed_work(system_wq, &snd->outmon,
+					 msecs_to_jiffies(CTR_SND_OUTMON_MS));
 		break;
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
@@ -750,6 +757,55 @@ static inline unsigned int ctr_snd_circ_dist(unsigned int a, unsigned int b,
 	return (d > size / 2) ? size - d : d;
 }
 
+/*
+ * Trust st_addr only while it advances at the stream's rate.  Its movement
+ * between pointer calls (always less than half the ring: the hrtimer calls
+ * this every period) is summed and compared with the elapsed time: after
+ * 100 ms within 3% the hardware pointer goes live, and the check repeats
+ * every second.  (3Beans' CSND runs on a clock of its own, several times off
+ * the guest's timekeeping: followed blindly, that pointer underran every
+ * stream within half a second.)
+ */
+static void ctr_snd_rate_check(struct ctr_snd *snd,
+			       struct snd_pcm_runtime *rt,
+			       unsigned int hw, ktime_t now)
+{
+	s64 us;
+	u64 expect, diff;
+
+	if (!snd->hw_cand) {
+		snd->hw_cand = true;
+		snd->hw_t0 = now;
+		snd->hw_prev = hw;
+		snd->hw_total = 0;
+		return;
+	}
+	snd->hw_total += (hw + rt->buffer_size - snd->hw_prev) % rt->buffer_size;
+	snd->hw_prev = hw;
+
+	us = ktime_us_delta(now, snd->hw_t0);
+	if (us < (snd->hw_live ? 1000000 : 100000))
+		return;
+	expect = div_u64((u64)us * rt->rate, USEC_PER_SEC);
+	diff = snd->hw_total > expect ? snd->hw_total - expect : expect - snd->hw_total;
+	if (diff * 100 <= expect * 3) {
+		if (!snd->hw_live)
+			dev_info(snd->dev,
+				 "CSND position register advances at the stream rate (%llu frames in %lld us); using hardware pointer\n",
+				 snd->hw_total, us);
+		snd->hw_live = true;
+	} else {
+		if (snd->hw_live || !snd->hw_rate_warned)
+			dev_info(snd->dev,
+				 "CSND position moved %llu frames in %lld us, expected %llu: using the clock pointer\n",
+				 snd->hw_total, us, expect);
+		snd->hw_rate_warned = true;
+		snd->hw_live = false;
+	}
+	snd->hw_t0 = now;
+	snd->hw_total = 0;
+}
+
 static snd_pcm_uframes_t ctr_snd_pcm_pointer(struct snd_pcm_substream *ss)
 {
 	struct ctr_snd *snd = snd_pcm_substream_chip(ss);
@@ -792,12 +848,19 @@ static snd_pcm_uframes_t ctr_snd_pcm_pointer(struct snd_pcm_substream *ss)
 	 */
 	hw_ok = ctr_snd_circ_dist(hw, sw, rt->buffer_size) < rt->buffer_size / 2;
 	if (hw != snd->hw_last) {
+		ktime_t now = ktime_get();
+
 		snd->hw_last = hw;
-		if (hw_ok && !snd->hw_live) {
-			snd->hw_live = true;
-			dev_info(snd->dev,
-				 "CSND position register advances; using hardware pointer\n");
-		}
+		snd->hw_moved = now;
+		if (hw_ok || snd->hw_cand)
+			ctr_snd_rate_check(snd, rt, hw, now);
+	} else if (snd->hw_live &&
+		   ktime_ms_delta(ktime_get(), snd->hw_moved) > 100) {
+		/* the register stopped while the stream runs: back to the clock */
+		snd->hw_live = false;
+		dev_warn(snd->dev,
+			 "CSND position register stuck at %lu; using the clock pointer\n",
+			 (unsigned long)hw);
 	}
 
 	/*
@@ -814,13 +877,15 @@ static snd_pcm_uframes_t ctr_snd_pcm_pointer(struct snd_pcm_substream *ss)
 	}
 
 	/*
-	 * Tape the application to the wall clock, not to st_addr: the hardware
-	 * position is a useful sanity check (see the log above) but if the CSND
-	 * is actually consuming the ring at a different rate than the requested
-	 * one, following st_addr would make the whole pipeline run at that wrong
-	 * rate (uniformly slow playback).
+	 * Report where the CSND really reads once st_addr is known to work.
+	 * The wall clock is only an estimate of it, and on hardware (2026-10-14)
+	 * it was off by up to 131 frames at every stream start and drifted
+	 * 26 frames/s (the CSND ran at 44126 Hz for 44100): with the hardware
+	 * behind the clock pointer, Android kept overwriting samples the CSND
+	 * had not played yet -- glitchy, crackling audio.  The measured rate is
+	 * right to within 0.1%, so following st_addr does not slow anything.
 	 */
-	snd->pos = sw;
+	snd->pos = snd->hw_live ? hw : sw;
 	return snd->pos;
 }
 
@@ -875,6 +940,643 @@ static const struct snd_pcm_ops ctr_snd_pcm_ops = {
 	.pointer = ctr_snd_pcm_pointer,
 	.copy_user = ctr_snd_copy_user,
 	.fill_silence = ctr_snd_fill_silence,
+	.mmap = snd_pcm_lib_default_mmap,
+};
+
+/* ------------------------------------------------------------------------- */
+/* Output-stage monitor (from Octoblimp's ctr_csnd.c, N3DS_CSND_OUTPUT_REARM) */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * On real hardware Octoblimp heard the first syllable of a clip and then
+ * nothing, while every sample had demonstrably reached CSND: the codec's
+ * output stage had gone down underneath the stream and stayed down.  So
+ * while a stream plays, re-read the power/mute bits codec init left every
+ * 100 ms and, if a power bit that was set has cleared (or a mute bit that was
+ * clear has set), log it and bring the stage back up, in codec init's order.
+ * Only bits compared against the init readback count, and the re-arms are
+ * capped per boot.
+ */
+static const struct {
+	u16 reg;
+	u8 set;		/* bits that must stay set (power) */
+	u8 clear;	/* bits that must stay clear (mute) */
+	const char *name;
+} ctr_snd_out_regs[CTR_SND_OUT_REGS] = {
+	{ CDC_101_17,			0xC0, 0x00, "p101.17" },  /* speaker driver */
+	{ CDC_100_118,			0xC0, 0x00, "p100.118" }, /* DAC power */
+	{ CDC_100_37,			0x88, 0x00, "p100.37" },  /* DAC up flags */
+	{ CDC_DAC_DATA_PATH_SETUP,	0xC0, 0x00, "p0.63" },    /* DAC line 1 on */
+	{ CDC_DAC_VOLUME_CTRL,		0x00, 0x0C, "p0.64" },    /* DAC mute bits */
+};
+
+static void ctr_snd_out_read(struct ctr_snd *snd, int *v)
+{
+	int i;
+
+	for (i = 0; i < CTR_SND_OUT_REGS; i++) {
+		u8 b;
+
+		v[i] = cdc_r(snd->codec, ctr_snd_out_regs[i].reg, &b) ? -1 : b;
+	}
+}
+
+static void ctr_snd_out_baseline(struct ctr_snd *snd)
+{
+	int i;
+
+	ctr_snd_out_read(snd, snd->out_base);
+	snd->out_base_ok = true;
+	for (i = 0; i < CTR_SND_OUT_REGS; i++)
+		if (snd->out_base[i] < 0)
+			snd->out_base_ok = false;
+	dev_info(snd->dev,
+		 "output stage at init: p101.17=0x%02x p100.118=0x%02x p100.37=0x%02x p0.63=0x%02x p0.64=0x%02x%s\n",
+		 snd->out_base[0] & 0xff, snd->out_base[1] & 0xff,
+		 snd->out_base[2] & 0xff, snd->out_base[3] & 0xff,
+		 snd->out_base[4] & 0xff,
+		 snd->out_base_ok ? "" : " (a read failed: monitor off)");
+}
+
+static void ctr_snd_outmon_work(struct work_struct *work)
+{
+	struct ctr_snd *snd = container_of(to_delayed_work(work),
+					   struct ctr_snd, outmon);
+	int now[CTR_SND_OUT_REGS];
+	u8 lost[CTR_SND_OUT_REGS];
+	bool any = false;
+	int i;
+
+	if (!atomic_read(&snd->running) || !snd->out_base_ok)
+		return;
+
+	ctr_snd_out_read(snd, now);
+	for (i = 0; i < CTR_SND_OUT_REGS; i++) {
+		u8 base = (u8)snd->out_base[i], cur = (u8)now[i];
+
+		lost[i] = 0;
+		if (now[i] < 0)
+			continue;
+		lost[i] = (base & ctr_snd_out_regs[i].set & (u8)~cur) |
+			  ((u8)~base & ctr_snd_out_regs[i].clear & cur);
+		any |= lost[i] != 0;
+	}
+
+	if (any) {
+		if (snd->rearms >= CTR_SND_OUTMON_MAX) {
+			dev_warn_once(snd->dev,
+				      "output stage still dropping after %u re-arms; standing down\n",
+				      snd->rearms);
+			return;
+		}
+		snd->rearms++;
+		dev_warn(snd->dev,
+			 "output stage dropped (p101.17=0x%02x p100.118=0x%02x p100.37=0x%02x p0.63=0x%02x p0.64=0x%02x), re-arm %u\n",
+			 now[0] & 0xff, now[1] & 0xff, now[2] & 0xff,
+			 now[3] & 0xff, now[4] & 0xff, snd->rearms);
+		if (lost[1] || lost[2]) {
+			cdc_mask(snd->codec, CDC_100_118, 0xC0, 0xC0);
+			msleep(10);
+			cdc_wait_mask(snd->codec, CDC_100_37, 0x88, 0x88);
+		}
+		if (lost[3])
+			cdc_mask(snd->codec, CDC_DAC_DATA_PATH_SETUP, 0xC0, 0xC0);
+		if (lost[4])
+			cdc_mask(snd->codec, CDC_DAC_VOLUME_CTRL, 0x00, 0x0C);
+		if (lost[0] || lost[1] || lost[2])
+			cdc_mask(snd->codec, CDC_101_17, 0xC0, 0xC0);
+	}
+
+	if (atomic_read(&snd->running))
+		mod_delayed_work(system_wq, &snd->outmon,
+				 msecs_to_jiffies(CTR_SND_OUTMON_MS));
+}
+
+/* ------------------------------------------------------------------------- */
+/* Microphone capture (from Octoblimp's ctr_csnd.c, N3DS_MIC_REAL)          */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * The MIC block at 0x10162000 is the DSi's microphone block (3dbrew "MIC
+ * Registers", GBATEK "DSi Microphone and SoundExt"):
+ *
+ *   +0x00 u16 MIC_CNT   bits 0-1 format, 2-3 rate divider (F/1..F/4 of the
+ *                       I2S1 clock), 8 FIFO empty, 9 half, 10 full,
+ *                       11 overrun, 12 FIFO clear (needs bit 15 clear),
+ *                       15 enable
+ *   +0x04 u32 MIC_DATA  a 16-word FIFO
+ *
+ * With I2S1 at 32.73 kHz the rates are 32730/16360/10910/8180 Hz.  The FIFO
+ * holds ~4 ms at 8180 Hz, so a 1 ms soft hrtimer drains it -- bounded by the
+ * FIFO depth, so it cannot become an unbounded softirq loop -- and never reads
+ * it while bit 8 says it is empty.  An overrun latches and stops sampling
+ * until the FIFO is cleared, so it restarts the block.
+ *
+ * Octoblimp found on hardware that the words do not always hold two samples
+ * as documented, so the first MIC_PROBE_WORDS words of each recording are
+ * measured (words per second, dead halves, a single sample sitting above
+ * filler bits) and decoded with what was found.  The live samples are then
+ * resampled (linear) to the rate the ALSA stream asked for.
+ *
+ * The analog front end is GBATEK's DSi mic_enable_tsc_init_list plus the CTR
+ * bias/PGA values libn3ds programs: a 10 Hz high-pass, MICBIAS = AVDD,
+ * PGA +21.5 dB, ADC powered and unmuted.
+ */
+#define MIC_BASE		0x10162000
+#define MIC_SIZE		8
+#define MIC_CNT			0x00
+#define MIC_DATA		0x04
+#define MIC_FMT_NORMAL		2u
+#define MIC_CNT_RATE(n)		(((n) & 3u) << 2)
+#define MIC_CNT_FIFO_EMPTY	BIT(8)
+#define MIC_CNT_FIFO_OVERRUN	BIT(11)
+#define MIC_CNT_FIFO_CLEAR	BIT(12)
+#define MIC_CNT_ENABLE		BIT(15)
+
+#define MIC_POLL_US		1000
+#define MIC_DRY_TICKS		(1000000 / MIC_POLL_US)
+
+#define MIC_LIVE_LO		1	/* bits 0-15 only */
+#define MIC_LIVE_HI		2	/* bits 16-31 only */
+#define MIC_LIVE_BOTH		3	/* two samples, low half first */
+#define MIC_LIVE_SLOT		4	/* one sample at bits shift..shift+15 */
+
+#define MIC_PROBE_WORDS		1024
+#define MIC_PROBE_DEAD_PCT	90
+#define MIC_WORDS_MAX		4300
+#define MIC_RATE_LOW		6000
+#define MIC_RATE_WANT		7500
+#define MIC_SOC_CLOCK		268111856ull
+
+#define CDC_MIC_BIAS		CDC(1, 0x2E)
+#define CDC_MIC_PGA		CDC(1, 0x2F)
+#define CDC_ADC_IN_P		CDC(1, 0x30)
+#define CDC_ADC_IN_M		CDC(1, 0x31)
+#define CDC_MIC_IIR		CDC(4, 8)
+#define CDC_ADC_POWER		CDC(0, 0x51)
+#define CDC_ADC_MUTE		CDC(0, 0x52)
+#define CDC_101_51		CDC(101, 51)	/* microphone bias */
+#define CDC_101_65		CDC(101, 65)	/* PGA gain correction */
+#define CDC_101_66		CDC(101, 66)	/* quick charge */
+
+static const u32 mic_hw_rates[4] = { 32730, 16360, 10910, 8180 };
+
+static int mic_rate_idx = 3;
+module_param(mic_rate_idx, int, 0644);
+MODULE_PARM_DESC(mic_rate_idx, "initial MIC rate divider (0-3 = 32730/16360/10910/8180 Hz)");
+
+static int mic_idx_clamp(int idx)
+{
+	return (idx < 0 || idx > 3) ? 3 : idx;
+}
+
+/* libn3ds maskWaitReg(): the analog block can take a few writes to latch. */
+static void cdc_mask_latch(struct ctr_snd *snd, u16 reg, u8 val, u8 mask)
+{
+	u8 v = 0;
+	int i;
+
+	for (i = 0; i < 64; i++) {
+		cdc_mask(snd->codec, reg, val, mask);
+		if (!cdc_r(snd->codec, reg, &v) && (v & mask) == val)
+			return;
+	}
+	dev_warn(snd->dev, "codec p%u.%u never latched 0x%02x (reads 0x%02x)\n",
+		 reg >> 7, reg & 0x7f, val, v);
+}
+
+static void ctr_snd_adc_on(struct ctr_snd *snd)
+{
+	/* 32737, -32737, 32705 big-endian: N0, N1, D1 of a 10 Hz high-pass */
+	static const u8 hp10[6] = { 0x7F, 0xE1, 0x80, 0x1F, 0x7F, 0xC1 };
+	unsigned int i;
+
+	/* the coefficient RAM is only safe to write with the ADC off */
+	if (!snd->adc_frontend_done) {
+		cdc_mask(snd->codec, CDC_100_34, 0x00, 0x04);
+		for (i = 0; i < ARRAY_SIZE(hp10); i++)
+			cdc_w(snd->codec, CDC_MIC_IIR + i, hp10[i]);
+		cdc_mask(snd->codec, CDC_ADC_IN_P, 0x40, 0xC0);
+		cdc_mask(snd->codec, CDC_ADC_IN_M, 0x40, 0xC0);
+		cdc_w(snd->codec, CDC_101_51, 3);	/* bias */
+		cdc_mask_latch(snd, CDC_101_65, 0, 0x3F);	/* PGA gain corr. */
+		cdc_mask_latch(snd, CDC_101_66, 2, 0x03);	/* quick charge */
+		cdc_w(snd->codec, CDC_MIC_PGA, 0x2B);	/* +21.5 dB */
+		cdc_w(snd->codec, CDC_MIC_BIAS, 0x03);	/* MICBIAS = AVDD */
+		snd->adc_frontend_done = true;
+	}
+	cdc_w(snd->codec, CDC_ADC_POWER, 0x80);
+	cdc_w(snd->codec, CDC_ADC_MUTE, 0x00);
+}
+
+static void ctr_snd_adc_off(struct ctr_snd *snd)
+{
+	cdc_w(snd->codec, CDC_ADC_MUTE, 0x80);
+	cdc_w(snd->codec, CDC_ADC_POWER, 0x00);
+}
+
+/* rs_step: Q16 input samples per output frame */
+static void mic_set_in_rate(struct ctr_snd *snd, u32 rate, u32 out_rate)
+{
+	rate = clamp_t(u32, rate, out_rate / 8, out_rate * 8);
+	snd->cap_in_rate = rate;
+	snd->rs_step = (u32)div_u64((u64)rate << 16, out_rate);
+}
+
+static void mic_probe_reset(struct ctr_snd *snd)
+{
+	snd->pr_t0 = ktime_get();
+	snd->pr_words = 0;
+	snd->pr_done = false;
+	snd->pr_lo_dead = 0;
+	snd->pr_hi_dead = 0;
+	snd->pr_same = 0;
+	memset(snd->pr_ones, 0, sizeof(snd->pr_ones));
+	memset(snd->pr_nsign, 0, sizeof(snd->pr_nsign));
+	memset(snd->pr_eq, 0, sizeof(snd->pr_eq));
+}
+
+/* disable, clear, enable: the start sequence and the overrun recovery */
+static void mic_hw_start(struct ctr_snd *snd)
+{
+	u16 base = MIC_FMT_NORMAL | MIC_CNT_RATE(snd->cap_idx);
+
+	writew(0, snd->mic + MIC_CNT);
+	writew(base | MIC_CNT_FIFO_CLEAR, snd->mic + MIC_CNT);
+	writew(base | MIC_CNT_ENABLE, snd->mic + MIC_CNT);
+	mic_probe_reset(snd);
+}
+
+static void mic_hw_stop(struct ctr_snd *snd)
+{
+	writew(0, snd->mic + MIC_CNT);
+}
+
+static void mic_probe_word(struct ctr_snd *snd, u32 w)
+{
+	u32 ns = w ^ ((w & BIT(31)) ? ~0u : 0u);	/* bit k != bit 31 */
+	u32 eq = ~(w ^ (w >> 1));			/* bit k == bit k+1 */
+	u16 lo = w & 0xffff, hi = w >> 16;
+	int k;
+
+	if (snd->pr_done)
+		return;
+	snd->pr_words++;
+	if (lo == 0x0000 || lo == 0xffff)
+		snd->pr_lo_dead++;
+	if (hi == 0x0000 || hi == 0xffff)
+		snd->pr_hi_dead++;
+	if (hi == lo)
+		snd->pr_same++;
+	for (k = 0; k < 32; k++) {
+		snd->pr_ones[k] += (w >> k) & 1;
+		snd->pr_nsign[k] += (ns >> k) & 1;
+		snd->pr_eq[k] += (eq >> k) & 1;
+	}
+}
+
+static u32 mic_pct(u32 part, u32 whole)
+{
+	return whole ? (u32)div_u64((u64)part * 100, whole) : 0;
+}
+
+static bool mic_bit_filler(struct ctr_snd *snd, int k, u32 n)
+{
+	u32 ones = mic_pct(snd->pr_ones[k], n);
+
+	return mic_pct(snd->pr_nsign[k], n) <= 2 || ones <= 2 || ones >= 98 ||
+	       mic_pct(snd->pr_eq[k], n) >= 98;
+}
+
+static bool mic_bit_active(struct ctr_snd *snd, int k, u32 n)
+{
+	u32 ones = mic_pct(snd->pr_ones[k], n);
+
+	return mic_pct(snd->pr_nsign[k], n) >= 15 && ones >= 10 && ones <= 90;
+}
+
+/* a measured rate, snapped to F/n of either I2S clock when within 2% */
+static u32 mic_snap_rate(u32 meas)
+{
+	static const u32 div[2] = { 8192, 5632 };
+	u32 best = meas, best_err = meas / 50 + 1;
+	int c, n;
+
+	for (c = 0; c < 2; c++)
+		for (n = 1; n <= 32; n++) {
+			u32 r = (u32)div_u64(MIC_SOC_CLOCK, div[c] * n);
+			u32 err = r > meas ? r - meas : meas - r;
+
+			if (err < best_err) {
+				best_err = err;
+				best = r;
+			}
+		}
+	return best;
+}
+
+/* returns true when it changed the divider and the block needs a restart */
+static bool mic_probe_decide(struct ctr_snd *snd, u32 out_rate)
+{
+	u32 n = snd->pr_words;
+	u64 ns = ktime_to_ns(ktime_sub(ktime_get(), snd->pr_t0));
+	u32 wps = (u32)div64_u64((u64)n * NSEC_PER_SEC, max_t(u64, ns, 1));
+	u32 lo_dead = mic_pct(snd->pr_lo_dead, n);
+	u32 hi_dead = mic_pct(snd->pr_hi_dead, n);
+	u32 same = mic_pct(snd->pr_same, n);
+	u8 live = MIC_LIVE_BOTH;
+	int shift = 0, t, k;
+	u32 meas, rate;
+	bool restart = false;
+
+	snd->pr_done = true;
+
+	/* one sample with filler under it and sign fill over it */
+	for (t = 0; t < 16 && mic_bit_filler(snd, t, n); t++)
+		;
+	if (t > 0 && t < 16 && mic_bit_active(snd, t, n)) {
+		for (k = t + 16; k < 31; k++)
+			if (mic_pct(snd->pr_nsign[k], n) > 2)
+				break;
+		if (k >= 31) {
+			live = MIC_LIVE_SLOT;
+			shift = t;
+		}
+	}
+	if (live != MIC_LIVE_SLOT) {
+		if (lo_dead >= MIC_PROBE_DEAD_PCT && hi_dead >= MIC_PROBE_DEAD_PCT)
+			live = MIC_LIVE_BOTH;	/* silence either way */
+		else if (hi_dead >= MIC_PROBE_DEAD_PCT || same >= MIC_PROBE_DEAD_PCT)
+			live = MIC_LIVE_LO;
+		else if (lo_dead >= MIC_PROBE_DEAD_PCT)
+			live = MIC_LIVE_HI;
+	}
+
+	meas = wps * (live == MIC_LIVE_BOTH ? 2 : 1);
+	rate = mic_snap_rate(meas);
+
+	/* too few live samples per second: pick a faster divider, once */
+	if (!snd->cap_idx_auto && rate < MIC_RATE_LOW &&
+	    !(lo_dead >= MIC_PROBE_DEAD_PCT && hi_dead >= MIC_PROBE_DEAD_PCT)) {
+		u32 f0 = rate * (snd->cap_idx + 1);
+		u32 w0 = wps * (snd->cap_idx + 1);
+		int i, best = snd->cap_idx;
+
+		for (i = 3; i >= 0; i--) {
+			if (w0 / (i + 1) > MIC_WORDS_MAX)
+				break;
+			best = i;
+			if (f0 / (i + 1) >= MIC_RATE_WANT)
+				break;
+		}
+		snd->cap_idx_auto = true;
+		if (best != snd->cap_idx) {
+			rate = f0 / (best + 1);
+			snd->cap_idx = best;
+			restart = true;
+		}
+	}
+
+	snd->cap_live = live;
+	snd->cap_shift = (s8)shift;
+	mic_set_in_rate(snd, rate, out_rate);
+	dev_info(snd->dev,
+		 "mic: %u words in %llu ms = %u words/s, dead lo %u%% hi %u%% same %u%% -> %s%s, %u Hz in, %u Hz out%s\n",
+		 n, div_u64(ns, NSEC_PER_MSEC), wps, lo_dead, hi_dead, same,
+		 live == MIC_LIVE_LO ? "low half" :
+		 live == MIC_LIVE_HI ? "high half" :
+		 live == MIC_LIVE_SLOT ? "one sample at bit " : "two samples",
+		 live == MIC_LIVE_SLOT ? "" : "", rate, out_rate,
+		 restart ? " (divider changed, restarting)" : "");
+	if (live == MIC_LIVE_SLOT)
+		dev_info(snd->dev, "mic: sample LSB at bit %d\n", shift);
+	return restart;
+}
+
+/* one live sample in, 0..8 frames out at the stream rate (linear) */
+static void mic_push(struct ctr_snd *snd, struct snd_pcm_runtime *rt, s16 s)
+{
+	s32 prev = snd->rs_prev;
+
+	while (snd->rs_pos < 0x10000) {
+		s16 out = (s16)(prev + (s32)(((s64)((s32)s - prev) *
+					     snd->rs_pos) >> 16));
+		s16 *dst = (s16 *)rt->dma_area +
+			   (size_t)snd->cap_pos * rt->channels;
+		unsigned int c;
+
+		for (c = 0; c < rt->channels; c++)
+			dst[c] = out;
+		if (++snd->cap_pos >= rt->buffer_size)
+			snd->cap_pos = 0;
+		snd->cap_period_fill++;
+		snd->rs_pos += snd->rs_step;
+	}
+	snd->rs_pos -= 0x10000;
+	snd->rs_prev = s;
+}
+
+static void mic_drain(struct ctr_snd *snd, struct snd_pcm_runtime *rt)
+{
+	unsigned int word, got = 0;
+	u16 cnt = 0;
+
+	/* 16 words is the whole FIFO; the 17th read notices it went empty */
+	for (word = 0; word < 17; word++) {
+		u32 w;
+
+		cnt = readw(snd->mic + MIC_CNT);
+		if (cnt & MIC_CNT_FIFO_EMPTY)
+			break;
+		w = readl(snd->mic + MIC_DATA);
+		mic_probe_word(snd, w);
+		got++;
+
+		switch (snd->cap_live) {
+		case MIC_LIVE_LO:
+			mic_push(snd, rt, (s16)(w & 0xffff));
+			break;
+		case MIC_LIVE_HI:
+			mic_push(snd, rt, (s16)(w >> 16));
+			break;
+		case MIC_LIVE_SLOT:
+			mic_push(snd, rt, (s16)(w >> snd->cap_shift));
+			break;
+		default:
+			mic_push(snd, rt, (s16)(w & 0xffff));
+			mic_push(snd, rt, (s16)(w >> 16));
+			break;
+		}
+	}
+
+	if (got) {
+		snd->cap_dry_ticks = 0;
+		if (!snd->cap_seen_data) {
+			snd->cap_seen_data = true;
+			dev_info(snd->dev, "mic: first samples out of the FIFO (MIC_CNT 0x%04x)\n",
+				 cnt);
+		}
+	} else if (!snd->cap_seen_data && ++snd->cap_dry_ticks == MIC_DRY_TICKS) {
+		dev_warn(snd->dev,
+			 "mic: FIFO still empty one second after enabling (MIC_CNT 0x%04x): the block is not sampling\n",
+			 cnt);
+	}
+
+	if (cnt & MIC_CNT_FIFO_OVERRUN) {
+		snd->cap_overruns++;
+		mic_hw_start(snd);
+	} else if (!snd->pr_done && snd->pr_words >= MIC_PROBE_WORDS) {
+		if (mic_probe_decide(snd, rt->rate))
+			mic_hw_start(snd);
+	}
+}
+
+static enum hrtimer_restart ctr_snd_cap_timer(struct hrtimer *t)
+{
+	struct ctr_snd *snd = container_of(t, struct ctr_snd, cap_timer);
+	struct snd_pcm_substream *ss = snd->cap_ss;
+
+	if (!atomic_read(&snd->cap_running) || !ss)
+		return HRTIMER_NORESTART;
+
+	mic_drain(snd, ss->runtime);
+	if (snd->cap_period_fill >= ss->runtime->period_size) {
+		snd->cap_period_fill %= ss->runtime->period_size;
+		snd_pcm_period_elapsed(ss);
+		if (!atomic_read(&snd->cap_running))
+			return HRTIMER_NORESTART;
+	}
+
+	hrtimer_forward_now(t, ns_to_ktime(MIC_POLL_US * NSEC_PER_USEC));
+	return HRTIMER_RESTART;
+}
+
+static const struct snd_pcm_hardware ctr_snd_cap_hw = {
+	.info = SNDRV_PCM_INFO_INTERLEAVED |
+		SNDRV_PCM_INFO_BLOCK_TRANSFER |
+		SNDRV_PCM_INFO_MMAP |
+		SNDRV_PCM_INFO_MMAP_VALID,
+	.formats = SNDRV_PCM_FMTBIT_S16_LE,
+	.rates = SNDRV_PCM_RATE_CONTINUOUS | SNDRV_PCM_RATE_8000_48000,
+	.rate_min = 8000,
+	.rate_max = 48000,
+	.channels_min = 1,
+	.channels_max = 2,
+	.buffer_bytes_max = 64 * 1024,
+	.period_bytes_min = 256,
+	.period_bytes_max = 32 * 1024,
+	.periods_min = 2,
+	.periods_max = 64,
+};
+
+static int ctr_snd_cap_open(struct snd_pcm_substream *ss)
+{
+	struct ctr_snd *snd = snd_pcm_substream_chip(ss);
+
+	if (!snd->mic || !snd->codec)
+		return -ENODEV;
+	snd->cap_ss = ss;
+	atomic_set(&snd->cap_running, 0);
+	ss->runtime->hw = ctr_snd_cap_hw;
+	return 0;
+}
+
+static void ctr_snd_cap_halt(struct ctr_snd *snd)
+{
+	atomic_set(&snd->cap_running, 0);
+	if (!hrtimer_callback_running(&snd->cap_timer))
+		hrtimer_cancel(&snd->cap_timer);
+	mic_hw_stop(snd);
+}
+
+static int ctr_snd_cap_close(struct snd_pcm_substream *ss)
+{
+	struct ctr_snd *snd = snd_pcm_substream_chip(ss);
+
+	ctr_snd_cap_halt(snd);
+	ctr_snd_adc_off(snd);
+	snd->cap_ss = NULL;
+	return 0;
+}
+
+static int ctr_snd_cap_hw_params(struct snd_pcm_substream *ss,
+				 struct snd_pcm_hw_params *params)
+{
+	return snd_pcm_lib_malloc_pages(ss, params_buffer_bytes(params));
+}
+
+static int ctr_snd_cap_hw_free(struct snd_pcm_substream *ss)
+{
+	struct ctr_snd *snd = snd_pcm_substream_chip(ss);
+
+	ctr_snd_cap_halt(snd);
+	return snd_pcm_lib_free_pages(ss);
+}
+
+static int ctr_snd_cap_prepare(struct snd_pcm_substream *ss)
+{
+	struct ctr_snd *snd = snd_pcm_substream_chip(ss);
+	struct snd_pcm_runtime *rt = ss->runtime;
+
+	ctr_snd_cap_halt(snd);
+	ctr_snd_adc_on(snd);		/* codec writes sleep: not in trigger */
+	memset(rt->dma_area, 0, frames_to_bytes(rt, rt->buffer_size));
+	snd->cap_pos = 0;
+	snd->cap_period_fill = 0;
+	/* a new recording: the documented format until the probe decides */
+	snd->cap_idx = mic_idx_clamp(mic_rate_idx);
+	snd->cap_idx_auto = false;
+	snd->cap_live = MIC_LIVE_BOTH;
+	snd->cap_shift = 0;
+	snd->rs_pos = 0;
+	snd->rs_prev = 0;
+	snd->cap_dry_ticks = 0;
+	snd->cap_overruns = 0;
+	mic_set_in_rate(snd, mic_hw_rates[snd->cap_idx], rt->rate);
+	dev_info(snd->dev, "capture: %u Hz, %u channel(s), %lu frame periods\n",
+		 rt->rate, rt->channels, (unsigned long)rt->period_size);
+	return 0;
+}
+
+static int ctr_snd_cap_trigger(struct snd_pcm_substream *ss, int cmd)
+{
+	struct ctr_snd *snd = snd_pcm_substream_chip(ss);
+
+	switch (cmd) {
+	case SNDRV_PCM_TRIGGER_START:
+	case SNDRV_PCM_TRIGGER_RESUME:
+		mic_hw_start(snd);
+		atomic_set(&snd->cap_running, 1);
+		hrtimer_start(&snd->cap_timer,
+			      ns_to_ktime(MIC_POLL_US * NSEC_PER_USEC),
+			      HRTIMER_MODE_REL_SOFT);
+		break;
+	case SNDRV_PCM_TRIGGER_STOP:
+	case SNDRV_PCM_TRIGGER_SUSPEND:
+		ctr_snd_cap_halt(snd);
+		break;
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static snd_pcm_uframes_t ctr_snd_cap_pointer(struct snd_pcm_substream *ss)
+{
+	struct ctr_snd *snd = snd_pcm_substream_chip(ss);
+
+	return snd->cap_pos;
+}
+
+static const struct snd_pcm_ops ctr_snd_cap_ops = {
+	.open = ctr_snd_cap_open,
+	.close = ctr_snd_cap_close,
+	.ioctl = snd_pcm_lib_ioctl,
+	.hw_params = ctr_snd_cap_hw_params,
+	.hw_free = ctr_snd_cap_hw_free,
+	.prepare = ctr_snd_cap_prepare,
+	.trigger = ctr_snd_cap_trigger,
+	.pointer = ctr_snd_cap_pointer,
 	.mmap = snd_pcm_lib_default_mmap,
 };
 
@@ -961,6 +1663,21 @@ static int ctr_snd_probe(struct platform_device *pdev)
 	snd->timer.function = ctr_snd_timer;
 	atomic_set(&snd->running, 0);
 
+	/* the codec regmap belongs to ctr_tsc, our parent device */
+	snd->codec = dev->parent ? dev_get_regmap(dev->parent, NULL) : NULL;
+	if (!snd->codec)
+		dev_warn(dev, "no codec regmap: no output monitor, no microphone\n");
+	INIT_DELAYED_WORK(&snd->outmon, ctr_snd_outmon_work);
+	if (snd->codec)
+		ctr_snd_out_baseline(snd);
+
+	snd->mic = devm_ioremap(dev, MIC_BASE, MIC_SIZE);
+	if (!snd->mic)
+		dev_warn(dev, "cannot map the MIC block: no microphone\n");
+	hrtimer_init(&snd->cap_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_SOFT);
+	snd->cap_timer.function = ctr_snd_cap_timer;
+	atomic_set(&snd->cap_running, 0);
+
 	err = snd_card_new(dev, -1, "nintendo3ds", THIS_MODULE, 0, &snd->card);
 	if (err < 0) {
 		dev_err(dev, "snd_card_new failed: %d\n", err);
@@ -970,7 +1687,7 @@ static int ctr_snd_probe(struct platform_device *pdev)
 	strscpy(snd->card->shortname, "Nintendo 3DS audio", sizeof(snd->card->shortname));
 	strscpy(snd->card->longname, "Nintendo 3DS CSND/TSC2117", sizeof(snd->card->longname));
 
-	err = snd_pcm_new(snd->card, "3ds-pcm", 0, 1, 0, &snd->pcm);
+	err = snd_pcm_new(snd->card, "3ds-pcm", 0, 1, 1, &snd->pcm);
 	if (err < 0)
 		goto err_card;
 	/*
@@ -984,6 +1701,7 @@ static int ctr_snd_probe(struct platform_device *pdev)
 	 */
 	snd->pcm->private_data = snd;
 	snd_pcm_set_ops(snd->pcm, SNDRV_PCM_STREAM_PLAYBACK, &ctr_snd_pcm_ops);
+	snd_pcm_set_ops(snd->pcm, SNDRV_PCM_STREAM_CAPTURE, &ctr_snd_cap_ops);
 	snd_pcm_lib_preallocate_pages_for_all(snd->pcm, SNDRV_DMA_TYPE_DEV,
 					      dev, 64 * 1024, 64 * 1024);
 
@@ -993,7 +1711,7 @@ static int ctr_snd_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, snd);
 
-	dev_info(dev, "registered ALSA card (CSND/I2S2, no DSP firmware needed)\n");
+	dev_info(dev, "registered ALSA card (CSND/I2S2 playback, MIC capture, no DSP firmware needed)\n");
 
 	/* The boot-time test tone (ctr_snd_test_tone) is kept compiled in
 	 * for bring-up but is no longer played: it was loud and surprising.
@@ -1012,6 +1730,8 @@ static int ctr_snd_remove(struct platform_device *pdev)
 
 	atomic_set(&snd->running, 0);
 	hrtimer_cancel(&snd->timer);
+	cancel_delayed_work_sync(&snd->outmon);
+	ctr_snd_cap_halt(snd);
 	csnd_play(snd->csnd, CTR_SND_CHANNEL, false);
 	snd_card_free(snd->card);
 	return 0;

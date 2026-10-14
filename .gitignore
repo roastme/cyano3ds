@@ -78,3 +78,6 @@ desktop.ini
 *~
 *.swp
 *.lnk
+
+# --- local build output of port/userland/camera/build-camera-hal.sh
+/port/userland/camera/out/

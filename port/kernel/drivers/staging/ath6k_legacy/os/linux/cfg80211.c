@@ -472,12 +472,24 @@ static const struct n3ds_key_variant n3ds_key_variants[] = {
 };
 #define N3DS_KEY_VARIANTS (int)(sizeof(n3ds_key_variants) / sizeof(n3ds_key_variants[0]))
 
-static int n3ds_keyvar = -1;                 /* -1 = sweep */
+/* N3DS_AR6014_KEY_VARIANT_PINNED (2026-10-13): row 2, "dsi-45-u0", is the
+ * one that works.  In the 2026-10-04 real-hardware log (the sweep ran rows
+ * 0, 1, 2 in one boot) rows 0 and 1 lost the BSS ~1.5 s after the keys went
+ * in (NWM disconnect reason=1), while with row 2 the link stayed up for
+ * minutes and the target delivered decrypted traffic: broadcast ARP, mDNS
+ * and a 576-byte DHCP OFFER addressed to the console.  Row 2 is also exactly
+ * what the open-source DSi library sends to the same firmware family
+ * (dsiwifi, arm_iop/source/ath/wmi.twl.c wmi_add_cipher_key(): the 45-byte
+ * struct, keyUsage 0 for the PTK and 1 for the GTK, key_op_ctrl 3).
+ * Sweeping from row 0 meant every boot spent its first two associations on
+ * formats that drop.  -1 still sweeps. */
+#define N3DS_KEYVAR_DEFAULT 2
+static int n3ds_keyvar = N3DS_KEYVAR_DEFAULT; /* -1 = sweep */
 module_param(n3ds_keyvar, int, 0644);
 MODULE_PARM_DESC(n3ds_keyvar,
-    "pin one AR6014 WMI_ADD_CIPHER_KEY variant (-1 sweeps one per association)");
+    "pin one AR6014 WMI_ADD_CIPHER_KEY variant (default 2 = dsi-45-u0; -1 sweeps one per association)");
 
-static int n3ds_keyvar_current;
+static int n3ds_keyvar_current = N3DS_KEYVAR_DEFAULT;
 
 static unsigned int n3ds_connect_attempt;
 static int n3ds_connect_latched = -1;
@@ -1536,6 +1548,7 @@ ar6k_cfg80211_disconnect_event(struct ar6_softc *ar, u8 reason,
 void
 ar6k_cfg80211_scan_node(void *arg, bss_t *ni)
 {
+    struct cfg80211_bss *bss;
     struct wiphy *wiphy = (struct wiphy *)arg;
     u16 size;
     unsigned char *ieeemgmtbuf = NULL;
@@ -1622,9 +1635,17 @@ ar6k_cfg80211_scan_node(void *arg, bss_t *ni)
 	AR_DEBUG_PRINTF(ATH_DEBUG_INFO,
 		("%s: bssid %pM channel %d freq %d size %d\n", __func__,
 			mgmt->bssid, channel->hw_value, freq, size));
-    cfg80211_inform_bss_frame(wiphy, channel, mgmt,
-                              le16_to_cpu(size),
-                              signal, GFP_KERNEL);
+    /*
+     * GFP_ATOMIC: this runs under wlan_iterate_nodes()'s node-table lock,
+     * from the SDIO interrupt thread ("BUG: sleeping function called from
+     * invalid context ... cfg80211_inform_single_bss_frame_data" on
+     * hardware, 2026-10-14).  The returned reference is not kept.
+     */
+    bss = cfg80211_inform_bss_frame(wiphy, channel, mgmt,
+                                    le16_to_cpu(size),
+                                    signal, GFP_ATOMIC);
+    if (bss)
+        cfg80211_put_bss(wiphy, bss);
 
     kfree (ieeemgmtbuf);
 }
@@ -1895,6 +1916,10 @@ ar6k_cfg80211_add_key(struct wiphy *wiphy, struct net_device *ndev,
 
     key = &ar->keys[key_index];
     A_MEMZERO(key, sizeof(struct ar_key));
+
+    /* a pinned variant applies at once, not only after the next disconnect */
+    if (n3ds_keyvar >= 0 && n3ds_keyvar < N3DS_KEY_VARIANTS)
+        n3ds_keyvar_current = n3ds_keyvar;
 
     if (pairwise || (mac_addr && !is_broadcast_ether_addr(mac_addr))) {
         /* N3DS_AR6014_KEY_VARIANT: see the table above -- pairwise_usage is

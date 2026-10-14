@@ -21,10 +21,8 @@
  * hang, so only 2 bytes are read.  `ctr_i2c` already configures I2C_BUS2_CNTEX
  * ("wait if SCL held low"), which the bootrom does not.
  *
- * Only **ZR** is reported as KEY_SEARCH and **ZL** as KEY_MENU; Android's
- * default qwerty.kl maps those scancodes to the SEARCH and MENU keycodes.
- * (The physical Home button is now KEY_HOME - fix-mcu-home-button.py - so the
- * MENU key had to move off it; ZL is the natural place for it.)
+ * **ZL** is reported as KEY_VOLUMEDOWN and **ZR** as KEY_VOLUMEUP.  The L and
+ * R shoulder buttons are MENU and SEARCH (fix-buttons.py).
  *
  * [1] http://problemkaputt.de/gbatek-3ds-i2c-new3ds-c-stick-and-zl-zr-buttons.htm
  */
@@ -41,9 +39,9 @@
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 
-/* button byte of the 2:0x2A read; ZL -> MENU, ZR -> SEARCH */
-#define ZL_BIT		0x04	/* ZL is reported as KEY_MENU */
-#define ZR_BIT		0x02	/* ZR is reported as KEY_SEARCH */
+/* button byte of the 2:0x2A read; ZL -> VOLUME_DOWN, ZR -> VOLUME_UP */
+#define ZL_BIT		0x04	/* ZL is reported as KEY_VOLUMEDOWN */
+#define ZR_BIT		0x02	/* ZR is reported as KEY_VOLUMEUP */
 
 #define POLL_MS		20
 
@@ -72,7 +70,7 @@ static void ctr_extrapad_poll(struct work_struct *work)
 		 * An all-ones reply means nothing responded on this bus (the
 		 * ctr_i2c driver does not report an address NACK), e.g. when the
 		 * DT node is attached to the wrong I2C bus.  Do not inject
-		 * MENU/SEARCH in that case.
+		 * VOLUME keys in that case.
 		 */
 		if (buf[0] == 0xff && buf[1] == 0xff) {
 			if (++ep->errors == 1 || (ep->errors % 500) == 0)
@@ -94,7 +92,7 @@ static void ctr_extrapad_poll(struct work_struct *work)
 
 		if (zl != ep->zl) {
 			ep->zl = zl;
-			input_report_key(ep->input, KEY_MENU, zl);
+			input_report_key(ep->input, KEY_VOLUMEDOWN, zl);
 			input_sync(ep->input);
 			dev_info(&ep->client->dev,
 				 "ZL=%d (raw %02x %02x)\n", zl, buf[0], buf[1]);
@@ -102,7 +100,7 @@ static void ctr_extrapad_poll(struct work_struct *work)
 
 		if (zr != ep->zr) {
 			ep->zr = zr;
-			input_report_key(ep->input, KEY_SEARCH, zr);
+			input_report_key(ep->input, KEY_VOLUMEUP, zr);
 			input_sync(ep->input);
 			dev_info(&ep->client->dev,
 				 "ZR=%d (raw %02x %02x)\n", zr, buf[0], buf[1]);
@@ -132,8 +130,8 @@ static int ctr_extrapad_probe(struct i2c_client *client,
 	ep->input->name = "nintendo3ds-extra";
 	ep->input->phys = "nintendo3ds/extra";
 	ep->input->id.bustype = BUS_I2C;
-	input_set_capability(ep->input, EV_KEY, KEY_MENU);
-	input_set_capability(ep->input, EV_KEY, KEY_SEARCH);
+	input_set_capability(ep->input, EV_KEY, KEY_VOLUMEDOWN);
+	input_set_capability(ep->input, EV_KEY, KEY_VOLUMEUP);
 
 	err = input_register_device(ep->input);
 	if (err)
@@ -143,7 +141,7 @@ static int ctr_extrapad_probe(struct i2c_client *client,
 	INIT_DELAYED_WORK(&ep->work, ctr_extrapad_poll);
 	schedule_delayed_work(&ep->work, msecs_to_jiffies(500));
 
-	dev_info(&client->dev, "New 3DS ZL/ZR reader ready (bus %d addr 0x%02x, ZL=MENU ZR=SEARCH)\n",
+	dev_info(&client->dev, "New 3DS ZL/ZR reader ready (bus %d addr 0x%02x, ZL=VOLUME_DOWN ZR=VOLUME_UP)\n",
 		 client->adapter->nr, client->addr);
 	return 0;
 }

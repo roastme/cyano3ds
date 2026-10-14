@@ -209,6 +209,40 @@ the useful evidence is:
 * `cfg80211: regulatory.db` load errors — harmless here (no userhelper), the
   chip is single-domain 2.4 GHz anyway.
 
+**2026-10-14:**
+
+* The card built on 2026-10-13 had no NWM firmware in its initramfs
+  (`request firmware failed ath6k/AR6002/nwm/stub_data.bin`). The four blobs
+  must be in `firmware/ath6k/AR6002/nwm/` when `mkinitramfs.sh` runs.
+* The driver used to sweep four `WMI_ADD_CIPHER_KEY` formats, one per
+  association, starting with two that lose the AP about 1.5 s after the keys go
+  in. In the 2026-10-04 hardware log, row 2, `dsi-45-u0`, kept the link up for
+  minutes and delivered decrypted traffic, including a DHCP offer addressed to
+  the console. That row is the 45-byte form with PTK usage 0 and GTK usage 1,
+  exactly what the DSi library dsiwifi sends.
+* It is now the default (`n3ds_keyvar=2`; `-1` brings the sweep back).
+* The first hardware boot with the firmware and the pin (2026-10-14 morning)
+  associated, finished the 4-way handshake and got a DHCP lease
+  (`192.168.0.38/24`). Android still had no network: `/bin/dhcpcd_wlan0.sh`
+  published `mask=0.0.0.0` and no `dhcp.wlan0.dns1`, because it took the
+  netmask from the default route, a second before dhcpcd wrote the lease. The
+  publisher now reads dhcpcd's own DHCPACK file
+  (`/data/misc/dhcp/dhcpcd-wlan0.lease`), deletes the stale one restored with
+  `/data` before it starts, and only falls back to the interface after 10 s
+  (netmask from the subnet route). `port/tests/test_wifi.py` runs it against a
+  stub dhcpcd.
+* Later that day the hand-off worked (Android: `netmask 255.255.255.0 dns1
+  192.168.0.1`), but the first lid close killed Wi-Fi for the rest of the boot.
+  The driver's suspend cut the AR6014's power, its SDIO reset timed out
+  (`AR6002 SDHC request timeout`, `Failed to reset target`) and the suspend was
+  refused; afterwards every scan failed with `Wmi not ready`. The chip is now
+  kept powered through sleep (`MMC_PM_KEEP_POWER`: the HIF suspend/resume do
+  nothing, and 3ds-sdhc restores its clock, bus width and SDIO poll on resume).
+  The DHCP script also pings the gateway after the hand-off and logs
+  `N3DS-DHCP: traffic check: ...`.
+* Scan results were reported with `GFP_KERNEL` under the node-table lock
+  (`BUG: sleeping function called from invalid context`); now `GFP_ATOMIC`.
+
 *Historical note:* `port/scripts/fix-wifi.py`, `fix-ath6kl.py` and
 `fix-ath6kl-diag.py` belong to an earlier attempt that extended mainline
 `ath6kl` with the AR6002 family.  They are kept for reference but are **not**

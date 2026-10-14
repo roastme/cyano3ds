@@ -142,12 +142,40 @@ card**. CM7's ALSA HAL (`BOARD_USES_ALSA_AUDIO`) then plays through `/dev/snd`.
 The CSND channel is mono, so the driver downmixes the interleaved ALSA ring.
 Playback is correct-pitch mono.
 
+The hardware programming follows Android3DS/Octoblimp's `ctr_csnd.c`, which is
+verified to make sound on a real console: their codec bring-up (both I2S lines
+at 32.73 kHz, no EQ upload), their output-stage monitor that re-arms the
+speaker path if it drops during a stream, and the microphone (the DSi MIC
+block at 0x10162000, drained by a 1 ms timer) as the card's ALSA capture
+stream, which `AndroidCapture` in `asound.conf` already points at.
+
+## Camera
+
+`ctr_cam.c` is Android3DS/Octoblimp's MT9V113 capture driver (`/dev/ctr_cam`,
+one YUYV frame per `read()`). CM7 was built with the stub camera, so
+`port/userland/camera/build-camera-hal.sh` rebuilds CM7's own
+`libcameraservice.so` with Octoblimp's HAL (`CameraHardwareN3ds`, moved to
+Gingerbread) in place of the stub, against CM7's libraries from `system.img`.
+Copy the result to `CYANO3DS/libcameraservice.so`: the boot stage installs card
+`.so` files over `/system/lib`, and deleting the file brings the stub back.
+Camera id 0 is the outer right sensor (back), id 1 the inner one (front).
+Preview is RGB565 (without copybit, libagl shows NV21 as grey).
+
+## External storage
+
+The boot stage owns the card, so Android's `vold` cannot mount it. Instead the
+card is mounted with vold's owner (`system:sdcard_rw`, mask `0002`; vold's
+`0702` would lock system_server out of the card APKs in `/system/app`),
+bound at `/mnt/sdcard`, and `/bin/fakevold` takes vold's place in `init.rc`
+and answers MountService with "sdcard /mnt/sdcard mounted". The kernel gets
+Android's `VFAT_IOCTL_GET_VOLUME_ID`, which MediaProvider needs.
+
 ## Input and the screen
 
 The touchscreen uses the direct-touch evdev driver from Android3DS/Octoblimp
 (median of the FIFO samples, `INPUT_PROP_DIRECT`, fixed calibration), with the
 circle pad on a separate trackball device. Buttons are mapped through
-`qwerty.kl`; A is OK, B is Back, ZL is Menu, ZR is Search and HOME is Home.
+`qwerty.kl`; A is OK, B is Back, L is Menu, R is Search, ZL/ZR are Volume down/up and HOME is Home.
 
 CM7's screen-timeout would turn the panel off and then drop all input. A small
 helper (`com.cyano3ds.PortHelper`, built as `/bin/porthelper.jar` by
@@ -159,8 +187,9 @@ refreshes user activity, which keeps the screen on. A card file
 
 - The boot stage pre-optimises the system apps and saves the result to
   `android/dalvik.tar`, so the first boot is slow and later boots are faster.
-- **`/data` is a small tmpfs**, seeded from `data.img`; app data does not
-  persist yet. Watch `No space left on device` in the logs.
+- **`/data` is a small tmpfs**, seeded from `data.img` and restored from the
+  `android/data-cm7*.tar` saves (see [INSTALL.md](INSTALL.md)). Watch
+  `No space left on device` in the logs.
 - CM ships extras that need hardware the 3DS does not have (DSPManager, FM,
   camera, Bluetooth, CMStats/updates, `rild`). They should fail gracefully;
   anything that crash-loops can be removed from `/system/app`.
@@ -169,7 +198,8 @@ refreshes user activity, which keeps the screen on. A card file
 
 - Boots to ADWLauncher + SystemUI; Settings, Contacts and Calculator run.
 - Touch, buttons, audio and the battery indicator work.
+- Lid sleep, the microphone and the cameras are new (2026-10-14) and need
+  checking on hardware: read `CYANO3DS/selftest.txt` after a boot.
 - Wi-Fi is being brought up (driver and firmware load; joining a network is
   the remaining piece).
-- No GPU, no second Android screen, no sleep, no camera — see
-  [SCOPE.md](SCOPE.md).
+- No GPU, no second Android screen — see [SCOPE.md](SCOPE.md).

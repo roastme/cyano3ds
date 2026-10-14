@@ -11,16 +11,16 @@ BTN_START, ...) have no entry in Android's /system/usr/keylayout/qwerty.kl, so
 EventHub maps them to keycode 0 and Android drops them.
 
 The mapping is chosen so the **3DS face buttons are normal Android system
-keys** (A = OK, B = back) and the New-3DS shoulder buttons keep the volume
-keys:
+keys** (A = OK, B = back) and the shoulder buttons are the Android
+menu/search keys, with the New-3DS ZL/ZR as the volume keys:
 
     D-pad              -> KEY_UP/DOWN/LEFT/RIGHT -> DPAD_UP/DOWN/LEFT/RIGHT
     A (hid 0)          -> 232  DPAD_CENTER   -> Android OK / select
     B (hid 1)          -> 158  BACK          -> Android back
     Select (hid 2)     ->  15  TAB
     Start (hid 3)      ->  28  ENTER
-    R / trig_right (8) -> 115  VOLUME_UP
-    L / trig_left (9)  -> 114  VOLUME_DOWN
+    R / trig_right (8) -> 217  SEARCH
+    L / trig_left (9)  -> 139  MENU
     X (hid 10)         ->  26  LEFT_BRACKET
     Y (hid 11)         ->  27  RIGHT_BRACKET
 
@@ -29,7 +29,7 @@ The physical Home button is handled by fix-mcu-home-button.py (KEY_HOME).
 ZL/ZR are NOT here: they are not in the HID_PAD register at all (on the New
 3DS bits 14/15 of that register are the IRQ-enable/condition bits).  They are
 read from the I2C device 2:0x2A (0x10148000) by the ctr_extrapad driver
-instead.  ZL reports KEY_MENU and ZR reports KEY_SEARCH there.
+instead.  ZL reports KEY_VOLUMEDOWN and ZR reports KEY_VOLUMEUP there.
 
 Why not BTN_A/BTN_B?  qwerty.kl is the only keylayout the SDK ships, and only
 its names (DPAD_CENTER, SPACE, TAB, ENTER, SEARCH, BACK, ...) can be mapped.
@@ -63,8 +63,8 @@ BUTTONS = [
     ("left",        "KEY_LEFT",  5, "Left",   None),
     ("up",          "KEY_UP",    6, "Up",     None),
     ("down",        "KEY_DOWN",  7, "Down",   None),
-    ("trig_right",  115, 8,  "Right trigger", "Android key mapping: VOLUME_UP"),
-    ("trig_left",   114, 9,  "Left trigger",  "Android key mapping: VOLUME_DOWN"),
+    ("trig_right",  217, 8,  "Right trigger", "Android key mapping: SEARCH"),
+    ("trig_left",   139, 9,  "Left trigger",  "Android key mapping: MENU"),
     ("x",           26,  10, "X",             "Android key mapping: LEFT_BRACKET"),
     ("y",           27,  11, "Y",             "Android key mapping: RIGHT_BRACKET"),
 ]
@@ -115,8 +115,8 @@ def main():
 
     lines[start:end + 1] = [build_block()]
     p.write_text("".join(lines))
-    print("    dtsi: hid_buttons -> A=DPAD_CENTER(OK) B=BACK L=VOLUME_DOWN R=VOLUME_UP; "
-          "ZL unmapped, ZR=SEARCH (ctr_extrapad)")
+    print("    dtsi: hid_buttons -> A=DPAD_CENTER(OK) B=BACK L=MENU R=SEARCH; "
+          "ZL=VOLUME_DOWN ZR=VOLUME_UP (ctr_extrapad)")
     return 0
 
 

@@ -93,6 +93,7 @@ struct hif_device {
     struct dl_list      ScatterReqHead;                /* scatter request list head */
     bool       scatter_enabled;               /* scatter enabled flag */
     bool   is_suspend;
+    bool   kept_power;                    /* suspended with MMC_PM_KEEP_POWER */
     bool   is_disabled;
     atomic_t   irqHandling;
     HIF_DEVICE_POWER_CHANGE_TYPE powerConfig;

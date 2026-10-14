@@ -60,14 +60,14 @@ The hard limits of the platform are collected in
 | X / Y | `[` / `]` |
 | START | Enter |
 | SELECT | Tab |
-| L / R | Volume down / up |
-| ZL | Menu |
-| ZR | Search |
+| L | Menu |
+| R | Search |
+| ZL / ZR (New 3DS) | Volume down / up |
 | HOME | Home |
 
 ## Installing
 
-Build output is assembled in `out/sd/`. Copy its contents to the root of the
+Build output is assembled in `out/release/` (`mksd.sh out/release --with-android`; it contains no third-party APKs, see `SHA256SUMS`). Copy its contents to the root of the
 3DS's SD card and boot `Cyano3DS.firm` from fastboot3DS (*Boot setup…* →
 slot → pick the payload, or *Boot from file…*).
 

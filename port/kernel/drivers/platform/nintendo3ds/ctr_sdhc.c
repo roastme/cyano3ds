@@ -837,7 +837,24 @@ static int ctr_sdhc_pm_suspend(struct device *dev)
 static int ctr_sdhc_pm_resume(struct device *dev)
 {
 	struct ctr_sdhc *host = dev_get_drvdata(dev);
+	unsigned long flags;
+
+	/*
+	 * The card kept its power and its state (MMC_PM_KEEP_POWER), so the
+	 * MMC core will not re-initialise it and will not call set_ios: put
+	 * the clock and bus width back after the reset (PDN sleep may also
+	 * have reset the controller), and restart the SDIO interrupt poll the
+	 * suspend stopped.
+	 */
+	spin_lock_irqsave(&host->lock, flags);
 	ctr_sdhc_reset(host);
+	__ctr_sdhc_set_ios(host->mmc, &host->mmc->ios);
+	if (host->sdio_irq_on) {
+		ctr_sdhc_sdio_arm(host, true);
+		mod_timer(&host->sdio_timer,
+			  jiffies + msecs_to_jiffies(SDHC_SDIO_POLL_MS));
+	}
+	spin_unlock_irqrestore(&host->lock, flags);
 	return 0;
 }
 #endif /* CONFIG_PM_SLEEP */
@@ -909,6 +926,9 @@ static int ctr_sdhc_probe(struct platform_device *pdev)
 	mmc->caps = MMC_CAP_4_BIT_DATA | MMC_CAP_NONREMOVABLE |
 		    MMC_CAP_SDIO_IRQ;
 	mmc->ocr_avail = MMC_VDD_32_33;
+	/* the Wi-Fi chip stays powered through system sleep (wifi-enable is
+	 * left on); see N3DS_WIFI_KEEP_POWER_SUSPEND in the ath6k HIF */
+	mmc->pm_caps |= MMC_PM_KEEP_POWER;
 	mmc->max_blk_size = 0x200;
 	mmc->max_blk_count = 0xFFFF;
 
