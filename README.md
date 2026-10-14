@@ -28,7 +28,7 @@ from fastboot3DS or Luma3DS; nothing on the NAND is written.
 | Boot | fastboot3DS → FIRM payload → Linux → CM7.2 → ADWLauncher + SystemUI on the bottom screen |
 | Display | bottom screen 320x240 RGB565, rotated in the kernel (`ctr_lcd_fb`); software GLES (`libGLES_android`) |
 | Input | resistive touchscreen (direct-touch evdev) and the full button set |
-| Audio | CSND + TSC2117/AIC3010 codec through CM7's ALSA HAL (mono) |
+| Audio | CSND + TSC2117/AIC3010 codec through CM7's ALSA HAL (mono), microphone |
 | Storage | read-only `/system` image; `/data` seeded from the card at boot |
 | Battery / RTC | MCU (`BAT0`/`ADP0`) |
 | CPU | 804 MHz, all four cores (New 3DS) |
@@ -44,7 +44,7 @@ from fastboot3DS or Luma3DS; nothing on the NAND is written.
   resume path on this hardware.
 - **Wi-Fi station mode** is not finished. See [docs/WIFI.md](docs/WIFI.md).
 - **No camera** (CM's camera is a stub), no Bluetooth, GPS, sensors or
-  telephony.
+  telephony. The camera app currently crashes.
 
 The hard limits of the platform are collected in
 [docs/SCOPE.md](docs/SCOPE.md).
