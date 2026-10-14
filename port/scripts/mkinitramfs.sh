@@ -741,6 +741,15 @@ arm-linux-gnueabi-gcc -static -O2 -Wall \
 	-o "$ROOT/bin/logwrap" "$PORT/userland/tests/logwrap.c"
 arm-linux-gnueabi-gcc -static -O2 -Wall \
 	-o "$ROOT/bin/rt" "$PORT/userland/tests/rt.c"
+# selftest: on-device subsystem checks, run by the init after boot
+install -m 755 "$PORT/userland/tests/selftest.sh" "$ROOT/bin/selftest"
+# fakevold: answers MountService in place of vold (the card is ours)
+arm-linux-gnueabi-gcc -static -O2 -Wall \
+	-o "$ROOT/bin/fakevold" "$PORT/userland/storage/fakevold.c"
+# pcmtest: record from (or play to) the ALSA PCM through the raw ioctls, so
+# the microphone stream can be checked without alsa-lib or Android.
+arm-linux-gnueabi-gcc -static -O2 -Wall \
+	-o "$ROOT/bin/pcmtest" "$PORT/userland/tests/pcmtest.c" -lm
 # hbfb: paint a liveness progress bar straight into a framebuffer (used by
 # /bin/heartbeat so the top screen proves the kernel/scheduler is still alive
 # even when the SD write path and printk are wedged).
@@ -819,7 +828,8 @@ fi
 # ---------------------------------------------------------------------------
 # Legacy prebuilt boot stage: the archived flavor's init binary plus the init.rc that
 # legacy/build-android.sh patched for the 3DS (mounts removed, fb symlink, props).
-# If they are not there, the initramfs still works as a bring-up image.
+# If they are not there the script fails (C-19); set ALLOW_NO_ANDROID=1 to
+# build a bring-up-only initramfs anyway.
 # ---------------------------------------------------------------------------
 AD="$PORT/../out/$ADIR"
 if [ -x "$AD/init" ] && [ -f "$AD/init.rc" ]; then
@@ -866,6 +876,10 @@ PY
 	sed -i 's|^service servicemanager /system/bin/servicemanager|service servicemanager /bin/logwrap /system/bin/servicemanager|' "$ROOT/init.rc"
 	grep -q "^service servicemanager /bin/logwrap " "$ROOT/init.rc" && echo "    init.rc: servicemanager wrapped in logwrap"
 	sed -i 's|^service media /system/bin/mediaserver|service media /bin/logwrap /system/bin/mediaserver|' "$ROOT/init.rc"
+	# vold -> fakevold: the card is mounted by this init, not by vold (see
+	# port/userland/storage/fakevold.c)
+	sed -i 's|^service vold /system/bin/vold|service vold /bin/fakevold|' "$ROOT/init.rc"
+	grep -q "^service vold /bin/fakevold" "$ROOT/init.rc" && echo "    init.rc: vold -> /bin/fakevold"
 	grep -q "^service media /bin/logwrap " "$ROOT/init.rc" && echo "    init.rc: media wrapped in logwrap"
 	# ---------------------------------------------------------------------
 	# N3DS_CM7_DHCP_PROPERTY_PUBLISHER
@@ -1044,6 +1058,10 @@ DHCP_CONF=/system/etc/dhcpcd/dhcpcd.conf
 HOOK=/bin/dhcpcd-hook.sh
 LEASE=/data/misc/dhcp/wlan0.lease.env
 IFACE=wlan0
+# dhcpcd's own record of the lease: the raw DHCPACK it bound to, written
+# (mode 0400, uid 1014; root reads it anyway) before it runs the hook.
+LEASEPKT=/data/misc/dhcp/dhcpcd-$IFACE.lease
+ACKENV=/data/misc/dhcp/ack.env
 BB=/bin/busybox
 
 L() {
@@ -1068,7 +1086,9 @@ for p in $(/bin/pidof dhcpcd 2>/dev/null); do
 	kill "$p" 2>/dev/null
 done
 
-rm -f "$LEASE"
+# (the lease packet too: /data comes back from the card, so the one on disk
+# may be from another day or another network)
+rm -f "$LEASE" "$LEASEPKT" "$ACKENV"
 /system/bin/dhcpcd -dd -f "$DHCP_CONF" -c "$HOOK" "$IFACE" &
 DHCPCD_PID=$!
 L "dhcpcd started pid=$DHCPCD_PID"
@@ -1115,22 +1135,62 @@ while [ "$i" -lt 40 ]; do
 		L "lease file: ip=$ip gw=$gw dns=$dns1"
 	fi
 
-	# Fallback: ask the kernel what address dhcpcd put on the interface.  The
+	# The hook has never been seen to write its file on hardware (the
+	# 2026-10-14 boot again: "executing `/bin/dhcpcd-hook.sh'", no
+	# hook.ran, no lease.env), but dhcpcd always writes the DHCPACK itself.
+	# Read it: yiaddr at offset 16, magic cookie 99.130.83.99 at 236, then
+	# the options (1 mask, 3 routers, 6 DNS, 51 lease time, 54 server id).
+	if [ -z "$ip" ] && [ -s "$LEASEPKT" ]; then
+		# (through a file, not eval "$(...)": no nested quoting for the
+		# ROM's old ash)
+		$BB od -An -v -tu1 "$LEASEPKT" 2>/dev/null | $BB awk '
+			function q(o) { return b[o] "." b[o+1] "." b[o+2] "." b[o+3] }
+			{ for (k = 1; k <= NF; k++) b[n++] = $k }
+			END {
+				if (n < 241 || b[236] != 99 || b[237] != 130 || b[238] != 83 || b[239] != 99)
+					exit
+				printf "ip=%s\n", q(16)
+				i = 240
+				while (i + 1 < n && b[i] != 255) {
+					if (b[i] == 0) { i++; continue }
+					t = b[i]; l = b[i+1]; v = i + 2
+					if (t == 1 && l >= 4) printf "mask=%s\n", q(v)
+					else if (t == 3 && l >= 4) printf "gw=%s\n", q(v)
+					else if (t == 6 && l >= 4) {
+						printf "dns1=%s\n", q(v)
+						if (l >= 8) printf "dns2=%s\n", q(v + 4)
+					}
+					else if (t == 51 && l == 4) printf "lease=%d\n", ((b[v] * 256 + b[v+1]) * 256 + b[v+2]) * 256 + b[v+3]
+					else if (t == 54 && l >= 4) printf "server=%s\n", q(v)
+					i = v + l
+				}
+			}' > "$ACKENV" 2>/dev/null
+		[ -s "$ACKENV" ] && . "$ACKENV"
+		[ -n "$ip" ] && L "lease packet: ip=$ip mask=$mask gw=$gw dns=$dns1 $dns2 lease=$lease server=$server"
+	fi
+
+	# Fallback: ask the kernel what address dhcpcd put on the interface.  Only
+	# after 10 s: dhcpcd adds the address before it writes the lease, and
+	# the first boot with a working link (2026-10-14) published from here a
+	# second before the lease existed.  The
 	# Local table in /proc/net/fib_trie lists it on its own line followed by
 	# "/32 host LOCAL" (this is the 5.x format, not the older "IP/32" one),
 	# and /proc/net/route carries the default route's gateway and netmask.
-	if [ -z "$ip" ]; then
+	if [ -z "$ip" ] && [ "$i" -ge 10 ]; then
 		ip=$($BB awk '/ [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ { ip = $NF }
 			/\/32 host LOCAL/ { if (ip != "" && ip !~ /^127\./) { print ip; exit } }' \
 			/proc/net/fib_trie 2>/dev/null)
 		if [ -n "$ip" ]; then
 			gwh=""
 			mh=""
-			route=$($BB awk -v i="$IFACE" '$1==i && $2=="00000000" {print $3" "$8; exit}' /proc/net/route 2>/dev/null)
-			gwh=${route%% *}
-			mh=${route##* }
+			# gateway from the default route, netmask from the subnet
+			# route (the default route's own mask is always 00000000:
+			# that published "mask=0.0.0.0" and Android had no network)
+			gwh=$($BB awk -v i="$IFACE" '$1==i && $2=="00000000" {print $3; exit}' /proc/net/route 2>/dev/null)
+			mh=$($BB awk -v i="$IFACE" '$1==i && $2!="00000000" && $3=="00000000" {print $8; exit}' /proc/net/route 2>/dev/null)
 			[ -n "$gwh" ] && gw=$(hexip "$gwh")
 			[ -n "$mh" ] && mask=$(hexip "$mh")
+			[ -n "$mask" ] || mask=255.255.255.0
 			L "interface fallback: ip=$ip mask=$mask gw=$gw"
 		fi
 	fi
@@ -1141,7 +1201,12 @@ while [ "$i" -lt 40 ]; do
 		[ -n "$gw" ] && setprop dhcp.$IFACE.gateway "$gw"
 		[ -n "$server" ] && setprop dhcp.$IFACE.server "$server"
 		setprop dhcp.$IFACE.leasetime "${lease:-86400}"
-		# net.dns*: uid 1014 is refused these ("net." is AID_SYSTEM only).
+		# WifiStateTracker reads the DNS servers from dhcp.<iface>.dns1/2
+		# (unset, it configured "dns1 0.0.0.0"); bionic reads net.dns*, which
+		# uid 1014 is refused ("net." is AID_SYSTEM only).
+		[ -n "$dns1" ] || dns1="$gw"
+		setprop dhcp.$IFACE.dns1 "$dns1"
+		setprop dhcp.$IFACE.dns2 "$dns2"
 		if [ -n "$dns1" ]; then
 			setprop net.dns1 "$dns1"
 			[ -n "$dns2" ] && setprop net.dns2 "$dns2"
@@ -1150,6 +1215,18 @@ while [ "$i" -lt 40 ]; do
 		fi
 		setprop dhcp.$IFACE.result ok
 		L "published: result=[$(getprop dhcp.$IFACE.result)] ip=[$(getprop dhcp.$IFACE.ipaddress)] gw=[$(getprop dhcp.$IFACE.gateway)] mask=[$(getprop dhcp.$IFACE.mask)] dns1=[$(getprop net.dns1)]"
+		# Does traffic flow?  (the card's logs said nothing either way
+		# on 2026-10-14: no app used the network before the lid closed)
+		if [ -n "$gw" ] && [ -x /system/bin/ping ]; then
+			(
+				sleep 5
+				if /system/bin/ping -c 3 -w 10 "$gw" >/dev/null 2>&1; then
+					L "traffic check: gateway $gw answers ping"
+				else
+					L "traffic check: gateway $gw does NOT answer ping"
+				fi
+			) &
+		fi
 		break
 	fi
 
@@ -1206,8 +1283,13 @@ PUBLISHER
 	grep -n 'ro.secure\|ro.debuggable\|allow.mock\|adb.enable' "$ROOT/default.prop" | sed 's/^/    default.prop: /'
 	: > "$ROOT/init.nintendo3ds.rc"
 	echo "    Android boot stage: /init.rc, /default.prop, /bin/android-init"
+elif [ "${ALLOW_NO_ANDROID:-0}" = 1 ]; then
+	echo "    WARNING: no Android boot stage ($AD missing); ALLOW_NO_ANDROID=1 set, building a bring-up-only initramfs" >&2
 else
-	echo "    no Android boot stage (run legacy/build-android.sh)"
+	echo "mkinitramfs.sh: no Android boot stage at $AD." >&2
+	echo "                Build CM7 first: bash port/scripts/cm7-rootless.sh package" >&2
+	echo "                (or set ALLOW_NO_ANDROID=1 for a bring-up-only initramfs)." >&2
+	exit 1
 fi
 
 # ---------------------------------------------------------------------------
@@ -1360,7 +1442,18 @@ done
 for d in $PARTDEVS $WHOLEDEVS; do
 	[ -b "$d" ] || continue
 	for fs in vfat auto; do
-		if mount -t "$fs" "$d" /mnt/sd 2>/dev/null; then
+		# vfat gets vold's ownership (system:sdcard_rw): Android sees the
+		# same mount at /mnt/sdcard (bound below, before Android's init
+		# starts), and apps holding WRITE_EXTERNAL_STORAGE (group sdcard_rw)
+		# must be able to write it.  Root is unaffected.
+		o=""
+		# Owner system (uid 1000), group sdcard_rw, others read-only.  Not
+		# vold's fmask=0702: that takes every right from the *owner*, and the
+		# owner is system_server's uid, so it could not read the card APKs
+		# bound into /system/app ("zipro: Unable to open zip
+		# '/system/app/AngryBirds.apk': Permission denied", 2026-10-14).
+		[ "$fs" = vfat ] && o="-o uid=1000,gid=1015,fmask=0002,dmask=0002"
+		if mount -t "$fs" $o "$d" /mnt/sd 2>/dev/null; then
 			SDDEV="$d"
 			break 2
 		fi
@@ -1580,8 +1673,65 @@ if [ -x /bin/android-init ] && [ -f /init.rc ] && [ -n "$SDDEV" ]; then
 			chmod 0666 "/sys/power/$f"
 		done
 		say "power HAL shim: /sys/power/{wake_lock,wake_unlock,state} present"
+		# SurfaceFlinger's display sleep/wake files (kernel fb-wait.c). Without
+		# them it VT-switches /dev/tty0 to a blank KD_GRAPHICS console, which
+		# wipes the kernel console off the TOP screen.  The tmpfs above hides the
+		# real /sys/power, so bind the two real files in from a second sysfs.
+		mkdir -p /mnt/sysfs-real
+		if mount -t sysfs none /mnt/sysfs-real 2>/dev/null; then
+			for f in wait_for_fb_sleep wait_for_fb_wake; do
+				[ -e "/mnt/sysfs-real/power/$f" ] || continue
+				: > "/sys/power/$f"
+				mount -o bind "/mnt/sysfs-real/power/$f" "/sys/power/$f" &&
+					say "power HAL shim: /sys/power/$f bound to the kernel's"
+			done
+		fi
+		# CM7's SurfaceFlinger also takes the VT whenever /sys/class/graphics/fbcon
+		# exists (DisplayHardwareBase.cpp, kFbconSysDir).  Overlay the class
+		# directory with links to every entry except fbcon; fbcon itself (and its
+		# real sysfs node under /sys/devices) is untouched.
+		if [ -e /sys/class/graphics/fbcon ] && [ -d /mnt/sysfs-real/class/graphics ] &&
+		   mount -t tmpfs none /sys/class/graphics 2>/dev/null; then
+			for e in /mnt/sysfs-real/class/graphics/*; do
+				[ "${e##*/}" = fbcon ] && continue
+				ln -s "$(readlink "$e")" "/sys/class/graphics/${e##*/}"
+			done
+			say "fbcon hidden from SurfaceFlinger: /sys/class/graphics = $(ls /sys/class/graphics | tr '\n' ' ')"
+		fi
+		# With the console VT kept in front, the 3DS buttons also reach it through
+		# the kernel keyboard handler (Android reads them from evdev).  Nothing
+		# reads the console, so stop the tty echoing them ("^[[C") onto the top
+		# screen and from turning a stray key into SIGINT/SIGQUIT for this script.
+		# The bring-up shell at the end turns both back on.
+		busybox stty -echo -isig < /dev/console 2>/dev/null
 	else
 		say "WARNING: /sys/power shim failed (touch would read x=0 y=0)"
+	fi
+
+	# Live Android log on the top-screen console, like Android3DS/Octoblimp's
+	# logcat_console.sh: a second logger reader (each reader has its own
+	# position, so logdump still sees everything) writing to /dev/tty0.
+	# Warnings and errors only by default: fbcon draws rotated glyphs in
+	# software, and Octoblimp traced a freeze to a verbose mirror eating the
+	# CPU.  A card file CYANO3DS/console-log holding a logcat priority letter
+	# (V D I W E F) changes the level; CYANO3DS/noconsolelog turns it off.
+	if [ ! -e "$LOGDIR/noconsolelog" ]; then
+		CLVL=W
+		if [ -f "$LOGDIR/console-log" ]; then
+			CLVL=$(head -c 1 "$LOGDIR/console-log" | tr a-z A-Z)
+			case "$CLVL" in V|D|I|W|E|F) ;; *) CLVL=W ;; esac
+		fi
+		(
+			while [ ! -e /dev/log/main ] || [ ! -x /system/bin/logcat ]; do
+				sleep 2
+			done
+			while true; do
+				printf '\n--- Android log (%s and above) ---\n' "$CLVL" > /dev/tty0
+				/system/bin/logcat -v time "*:$CLVL" > /dev/tty0 2>&1
+				sleep 5
+			done
+		) &
+		say "Android log ($CLVL and above) mirrored to the top-screen console"
 	fi
 
 	# Start capturing Android's own logs (/dev/log/main) and make the SD card
@@ -1898,9 +2048,51 @@ if [ -x /bin/android-init ] && [ -f /init.rc ] && [ -n "$SDDEV" ]; then
 			say "restoring /data state from android/@@DATATAR@@ ..."
 			if tar xf "$DATA_TAR" -C /data 2>/dev/null; then
 				say "  /data state restored (persistent)"
+				busybox touch /mnt/probe/dataflush-state.stamp 2>/dev/null
 			else
 				say "  @@DATATAR@@ restore FAILED; falling back to the data.img seed"
 			fi
+		fi
+		# Installed apps (/data/app, /data/app-private) are a separate tar
+		# so the multi-megabyte APKs are only rewritten when an app is
+		# installed or removed, not every time a setting changes.
+		APPS_TAR="${DATA_TAR%.tar}-apps.tar"
+		if [ -f "$APPS_TAR" ]; then
+			say "restoring installed apps from android/${APPS_TAR##*/} ..."
+			if tar xf "$APPS_TAR" -C /data 2>/dev/null; then
+				say "  installed apps restored"
+				busybox touch /mnt/probe/dataflush-apps.stamp 2>/dev/null
+			else
+				say "  ${APPS_TAR##*/} restore FAILED"
+			fi
+		fi
+		# Screen timeout.  The keep-awake PortHelper is not in this
+		# initramfs (it needs java + smali at build time) and "stay on while
+		# plugged in" does nothing on battery (the real MCU battery reports
+		# Discharging), so the saved settings' screen_off_timeout decides:
+		# the card's data tar had CM7's default 60000, and 60 s after the
+		# last touch PowerManagerService turned the panels off ("power: ***
+		# set_screen_state 0", 2026-10-14) -- with the POWER button being a
+		# clean shutdown here, nothing could bring them back.  -1 is "never"
+		# to Gingerbread's PowerManagerService (mScreenOffDelay =
+		# Integer.MAX_VALUE).  A value in ms in CYANO3DS/screen-timeout
+		# (e.g. 120000) is used instead.
+		SETTINGS_DB=/data/data/com.android.providers.settings/databases/settings.db
+		SCREEN_TIMEOUT=-1
+		if [ -s "$LOGDIR/screen-timeout" ]; then
+			v=$(tr -dc '0-9-' < "$LOGDIR/screen-timeout")
+			[ -n "$v" ] && SCREEN_TIMEOUT=$v
+		fi
+		if [ -f "$SETTINGS_DB" ] && [ -x /system/xbin/sqlite3 ]; then
+			if /system/xbin/sqlite3 "$SETTINGS_DB" \
+				"INSERT OR REPLACE INTO system (name, value) VALUES ('screen_off_timeout', '$SCREEN_TIMEOUT');" \
+				2>>"$LOGDIR/init.log"; then
+				say "screen_off_timeout=$SCREEN_TIMEOUT in settings.db"
+			else
+				say "screen_off_timeout: sqlite3 FAILED"
+			fi
+		else
+			say "screen_off_timeout: no settings.db yet (first boot) or no sqlite3; set on the next boot"
 		fi
 		# N3DS_CM7_DHCP_DIR: dhcpcd writes its pid file to
 		# /data/misc/dhcp/dhcpcd-wlan0.pid and its lease next to it, and it
@@ -1956,21 +2148,139 @@ if [ -x /bin/android-init ] && [ -f /init.rc ] && [ -n "$SDDEV" ]; then
 			rm -f /data/dalvik-cache/system@app@*.apk@classes.dex
 			say "  stale app dexopt caches removed (services.jar changed)"
 		fi
-		# /bin/dataflush: save the persistent subset.  tmp+rename so a power
-		# loss or a yanked card cannot leave a half-written archive.
+		# /bin/dataflush [periodic|lid-close|shutdown|manual]: save /data.
+		#
+		# /data persistence.  /data stays a tmpfs (see above), and all of it
+		# except the dex caches is saved to the card as two plain tars:
+		#   android/@@DATATAR@@         settings, accounts, Wi-Fi networks,
+		#                              app data and databases
+		#   android/<same>-apps.tar    installed apps (/data/app,
+		#                              /data/app-private)
+		# A tar is only rewritten when something under it changed since the
+		# last save (find -newer a stamp on the /mnt/probe tmpfs), so the
+		# card sees a write only after real changes.  It is saved every 60 s,
+		# before the console sleeps on lid close (the kernel's ctr_lid
+		# sleep_hook runs /bin/lid-sleep-hook) and on a clean shutdown.
+		# tmp+rename, so a power cut or a yanked card mid-write keeps the
+		# previous archive.  flock keeps two savers from interleaving.
 		cat > /bin/dataflush <<'DF'
 #!/bin/sh
+BB=/bin/busybox
+OUT=/mnt/sd/android
+STATE=$OUT/@@DATATAR@@
+APPS=${STATE%.tar}-apps.tar
+RUN=/mnt/probe
+why=${1:-manual}
 cd /data 2>/dev/null || exit 0
+[ -d "$OUT" ] || exit 0
+exec 9>>"$RUN/dataflush.lock"
+if [ "$why" = periodic ]; then
+	$BB flock -n 9 || exit 0
+else
+	# busybox flock has no -w: wait up to 30 s for a running save
+	i=0
+	until $BB flock -n 9; do
+		i=$((i + 1))
+		[ $i -ge 30 ] && exit 1
+		sleep 1
+	done
+fi
+# changed STAMP PATH...: something under PATH is newer than STAMP (or no STAMP)
+changed() {
+	stamp=$1; shift
+	[ -e "$stamp" ] || return 0
+	[ -n "$($BB find "$@" -newer "$stamp" 2>/dev/null | $BB head -n 1)" ]
+}
+# save TAR STAMP PATH...
+save() {
+	name=$1; stamp=$2; shift 2
+	changed "$stamp" "$@" || return 0
+	$BB touch "$stamp.new"
+	if $BB tar cf "$name.tmp" "$@" && $BB sync && $BB mv -f "$name.tmp" "$name"; then
+		$BB mv -f "$stamp.new" "$stamp"
+		echo "$($BB date +%H:%M:%S) $why: saved ${name##*/} ($($BB stat -c %s "$name") bytes)"
+	else
+		$BB rm -f "$name.tmp" "$stamp.new"
+		echo "$($BB date +%H:%M:%S) $why: FAILED to save ${name##*/}"
+		return 1
+	fi
+}
+rc=0
 set --
-for d in system data misc property local tombstones anr; do
+for d in *; do
+	case "$d" in
+	'*'|app|app-private|dalvik-cache|lost+found) ;;
+	*) set -- "$@" "$d" ;;
+	esac
+done
+if [ $# -gt 0 ]; then
+	save "$STATE" "$RUN/dataflush-state.stamp" "$@" || rc=1
+fi
+set --
+for d in app app-private; do
 	[ -e "$d" ] && set -- "$@" "$d"
 done
-[ $# -gt 0 ] || exit 0
-sync
-tar cf /mnt/sd/android/@@DATATAR@@.tmp "$@" \
-	&& mv -f /mnt/sd/android/@@DATATAR@@.tmp /mnt/sd/android/@@DATATAR@@
+if [ $# -gt 0 ]; then
+	save "$APPS" "$RUN/dataflush-apps.stamp" "$@" || rc=1
+fi
+$BB sync
+exit $rc
 DF
 		chmod 755 /bin/dataflush
+		# /bin/lid-sleep-hook: run by the kernel (ctr_lid "sleep_hook") before
+		# the console sleeps on lid close.  The kernel waits for it, so it
+		# gives the save at most 20 s and then lets the console sleep anyway
+		# (a wedged SD write must not keep the screens lit in a bag).
+		cat > /bin/lid-sleep-hook <<'LH'
+#!/bin/sh
+echo "lid-sleep-hook: saving /data before sleep" > /dev/kmsg 2>/dev/null
+# The logs reach the card from RAM every 10 s, and suspend freezes the
+# copier: put them there now, so a sleep that never comes back still leaves
+# its start on the card (2026-10-14: the last copy predated the lid close).
+for f in kmsg.log android-log.txt; do
+	cp /mnt/probe/$f /mnt/sd/CYANO3DS/$f 2>/dev/null
+done
+/bin/dataflush lid-close >> /mnt/sd/CYANO3DS/dataflush.log 2>&1 &
+pid=$!
+i=0
+while kill -0 $pid 2>/dev/null && [ $i -lt 20 ]; do
+	sleep 1
+	i=$((i + 1))
+done
+kill -0 $pid 2>/dev/null &&
+	echo "lid-sleep-hook: save still running after 20 s, sleeping anyway" > /dev/kmsg 2>/dev/null
+echo "lid-sleep-hook: done, suspending" > /dev/kmsg 2>/dev/null
+cp /mnt/probe/kmsg.log /mnt/sd/CYANO3DS/kmsg.log 2>/dev/null
+sync
+exit 0
+LH
+		chmod 755 /bin/lid-sleep-hook
+		for f in /sys/bus/platform/devices/*mcu-lid*/sleep_hook; do
+			[ -e "$f" ] || continue
+			echo /bin/lid-sleep-hook > "$f" 2>/dev/null &&
+				say "lid close saves /data first (sleep_hook -> /bin/lid-sleep-hook)"
+		done
+		# Lid sleep starts disarmed (ctr_lid.c): a lid shut during boot must
+		# not stop Android coming up.  Arm it 15 s after Android reports
+		# boot completed; if the lid is shut by then, the console sleeps
+		# right away.  (getprop cannot read Android's properties from this
+		# init, so the signal is PowerManagerService's log line.)  After
+		# 30 minutes without it, arm anyway.
+		(
+			i=0
+			while [ $i -lt 1800 ]; do
+				grep -q "PowerManagerService: bootCompleted" /mnt/probe/android-log.txt 2>/dev/null && break
+				i=$((i + 2))
+				sleep 2
+			done
+			sleep 15
+			for f in /sys/bus/platform/devices/*mcu-lid*/sleep_on_close; do
+				[ -e "$f" ] || continue
+				echo 1 > "$f" 2>/dev/null
+				echo "lid sleep armed (boot completed $i s after the wait began, +15 s; lid $(cat "${f%/*}/closed" 2>/dev/null))" > /dev/kmsg 2>/dev/null
+			done
+		) &
+		say "lid sleep: armed 15 s after Android boot completes"
 		# /bin/shutdown: clean power-off for a short power-button press.
 		#
 		# The native `powerkey` used to call reboot(RB_POWER_OFF) directly, which
@@ -2002,7 +2312,7 @@ for sig in TERM KILL; do
 	[ "$sig" = TERM ] && sleep 2
 done
 # 3. persist /data and flush the card
-[ -x /bin/dataflush ] && /bin/dataflush
+[ -x /bin/dataflush ] && /bin/dataflush shutdown >> /mnt/sd/CYANO3DS/dataflush.log 2>&1
 sync
 sleep 1
 # 4. power off (kernel pm_power_off -> MCU)
@@ -2011,14 +2321,15 @@ poweroff -f
 SD
 		chmod 755 /bin/shutdown
 		say "clean shutdown helper installed (/bin/shutdown)"
-		# periodic flush: a hard power-off can still lose up to 5 min of state
+		# periodic save: cheap when nothing changed (one find), so a hard
+		# power-off loses at most about a minute of state
 		(
 			while true; do
-				sleep 300
-				/bin/dataflush
+				sleep 60
+				/bin/dataflush periodic
 			done
 		) >> "$LOGDIR/dataflush.log" 2>&1 &
-		say "data flusher armed (tar /data/{system,data,misc,...} -> android/@@DATATAR@@ every 5 min)"
+		say "data saver armed (/data -> android/@@DATATAR@@ + apps tar, every 60 s when changed, on lid close and on shutdown)"
 		mount -t tmpfs none /cache 2>/dev/null
 		# Keep /data/dalvik-cache on /data (persistent): dexopt then only runs
 		# once and survives reboots.  Also lift the system limits dalvik can
@@ -2281,7 +2592,7 @@ GBCXML
 		# log_main/log_events/log_radio (the 2009 ABI).  The old driver used
 		# "log/main", which no Android init special-case matches, so init
 		# created /dev/main instead of /dev/log/main.
-		for m in binder ashmem log_main log_events log_radio; do
+		for m in binder ashmem alarm ctr_cam log_main log_events log_radio; do
 			case "$m" in
 				log_*) dev="/dev/log/${m#log_}" ;;
 				*)     dev="/dev/$m" ;;
@@ -2296,7 +2607,10 @@ GBCXML
 		# Keep re-applying the mode in the background - Android's own init can
 		# re-create device nodes - and log it so an EACCES can be told apart
 		# from a uid problem.
-		chmod 0666 /dev/binder /dev/ashmem 2>/dev/null
+		# /dev/alarm: AlarmManagerService (system_server, uid 1000) opens it O_RDWR
+		chmod 0666 /dev/binder /dev/ashmem /dev/alarm 2>/dev/null
+		# /dev/ctr_cam: the camera HAL runs in mediaserver (uid media)
+		chmod 0666 /dev/ctr_cam 2>/dev/null
 		chmod 0666 /dev/log/main /dev/log/events /dev/log/radio 2>/dev/null
 		# system_server (uid 1000) must be able to read/write /dev/urandom and
 		# open /dev/tty0; SurfaceFlinger also opens it.
@@ -2676,7 +2990,16 @@ GBCXML
 			ok=0; bad=0; skip=0
 			total=$(ls /system/framework/*.jar /system/app/*.apk 2>/dev/null | wc -l)
 			i=0
-			for src in /system/framework/*.jar /system/app/*.apk; do
+			# Optimize the boot-classpath jars first, in BOOTCLASSPATH order.  A
+			# plain glob runs them alphabetically, so am.jar, bouncycastle.jar,
+			# android.policy.jar ... ran before core.jar had a cache, and their
+			# dexopt aborted (the NoClassDefFoundError path SIGSEGVs).  The
+			# later glob entries then skip the BCP jars as "already valid".
+			BCP_FIRST=""
+			for b in core bouncycastle ext framework android.policy services; do
+				BCP_FIRST="$BCP_FIRST /system/framework/$b.jar"
+			done
+			for src in $BCP_FIRST /system/framework/*.jar /system/app/*.apk; do
 				[ -f "$src" ] || continue
 				i=$((i+1))
 				base=$(basename "$src")
@@ -2845,6 +3168,29 @@ GBCXML
 		# SD card: if the card wedges, a tee blocked on the SD fills this pipe
 		# and stops the init dead (it is the parent of every service).  The
 		# late-diag flusher mirrors the file to the SD every few seconds.
+		# On-device self-test (port/userland/tests/selftest.sh): once Android
+		# has had five minutes, check lid sleep, Wi-Fi, audio, cameras,
+		# storage, /data saving and the console log, and leave the report in
+		# CYANO3DS/selftest.txt.  CYANO3DS/noselftest turns it off.
+		if [ -x /bin/selftest ] && [ ! -e "$LOGDIR/noselftest" ]; then
+			(
+				sleep 300
+				/bin/selftest > /mnt/probe/selftest.txt 2>&1
+				cp /mnt/probe/selftest.txt "$LOGDIR/selftest.txt" 2>/dev/null
+				sync
+			) &
+			say "self-test armed (CYANO3DS/selftest.txt about 5 min after Android starts)"
+		fi
+		# External storage: Android's EXTERNAL_STORAGE is /mnt/sdcard.  Bind
+		# the card there; /bin/fakevold (in place of vold, see init.rc) then
+		# reports it as mounted, so the Camera, Gallery, Music and the
+		# browser's downloads accept it.
+		mkdir -p /mnt/sdcard 2>/dev/null
+		if mount -o bind /mnt/sd /mnt/sdcard 2>/dev/null; then
+			say "SD card bound at /mnt/sdcard (external storage, reported mounted by fakevold)"
+		else
+			say "WARNING: bind /mnt/sd -> /mnt/sdcard failed: no external storage for Android"
+		fi
 		/bin/android-init 2>&1 | tee -a /mnt/probe/android-init.log
 		st=$?
 		say ""
@@ -2961,6 +3307,7 @@ say "staying in bring-up mode: starting an interactive shell on this (top)"
 say "screen.  the touchscreen is a keyboard (blind: the on-screen keyboard"
 say "is drawn by the old bottom-screen driver).  try: dmesg | tail -30"
 
+busybox stty echo isig < /dev/console 2>/dev/null
 while true; do
 	/bin/sh -i
 	echo "[init] shell exited, restarting"
@@ -3001,7 +3348,17 @@ say "checking the busybox applets the init script uses"
 # episode).  Fail the build instead.
 NEEDED="$INIT_APPLETS"
 APPLET_LIST=/tmp/busybox-applets-$$
-"$BB" --list > "$APPLET_LIST" 2>/dev/null || true
+# The busybox is armel: on an x86 host it only runs under qemu-user (the
+# qemu-user-static package in BUILD.md step 0).  Without this, --list fails
+# silently and every applet looks missing.
+BB_RUN=("$BB")
+if ! "$BB" --list >/dev/null 2>&1; then
+	command -v qemu-arm-static >/dev/null || {
+		echo "FATAL: cannot run $BB on this host and qemu-arm-static is not installed" >&2
+		exit 1; }
+	BB_RUN=(qemu-arm-static "$BB")
+fi
+"${BB_RUN[@]}" --list > "$APPLET_LIST" 2>/dev/null || true
 for a in $NEEDED; do
 	# NOTE: do *not* pipe --list into `grep -q`: with pipefail, grep's early
 	# exit closes the pipe, busybox --list dies of SIGPIPE and the pipeline

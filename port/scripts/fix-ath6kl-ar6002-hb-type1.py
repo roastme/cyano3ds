@@ -30,6 +30,7 @@ dropped (or the value put back to 2 and the poll to 1000).
 """
 
 import sys
+import os
 import pathlib
 
 
@@ -60,7 +61,7 @@ H_NEW = ("/* 0 = disabled; the Type1 Main image ignores the timeout and the\n"
 
 def main():
     kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1
-                      else "/root/p3ds/src/linux-3ds")
+                      else os.path.expanduser("~/p3ds/src/linux-3ds"))
     ath = kd / "drivers/net/wireless/ath/ath6kl"
     corec = ath / "core.c"
     coreh = ath / "core.h"

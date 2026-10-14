@@ -22,6 +22,7 @@ executes.  Idempotent.
 """
 
 import sys
+import os
 import pathlib
 
 def die(msg):
@@ -29,7 +30,7 @@ def die(msg):
 
 def main():
     kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1
-                      else "/root/p3ds/src/linux-3ds")
+                      else os.path.expanduser("~/p3ds/src/linux-3ds"))
     p = kd / "drivers/net/wireless/ath/ath6kl/init.c"
     if not p.exists():
         die("no ath6kl init.c at %s" % p)

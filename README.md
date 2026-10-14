@@ -28,7 +28,7 @@ from fastboot3DS or Luma3DS; nothing on the NAND is written.
 | Boot | fastboot3DS → FIRM payload → Linux → CM7.2 → ADWLauncher + SystemUI on the bottom screen |
 | Display | bottom screen 320x240 RGB565, rotated in the kernel (`ctr_lcd_fb`); software GLES (`libGLES_android`) |
 | Input | resistive touchscreen (direct-touch evdev) and the full button set |
-| Audio | CSND + TSC2117/AIC3010 codec through CM7's ALSA HAL (mono) |
+| Audio | CSND + TSC2117/AIC3010 codec through CM7's ALSA HAL (mono), microphone |
 | Storage | read-only `/system` image; `/data` seeded from the card at boot |
 | Battery / RTC | MCU (`BAT0`/`ADP0`) |
 | CPU | 804 MHz, all four cores (New 3DS) |
@@ -44,7 +44,7 @@ from fastboot3DS or Luma3DS; nothing on the NAND is written.
   resume path on this hardware.
 - **Wi-Fi station mode** is not finished. See [docs/WIFI.md](docs/WIFI.md).
 - **No camera** (CM's camera is a stub), no Bluetooth, GPS, sensors or
-  telephony.
+  telephony. The camera app currently crashes.
 
 The hard limits of the platform are collected in
 [docs/SCOPE.md](docs/SCOPE.md).
@@ -60,14 +60,14 @@ The hard limits of the platform are collected in
 | X / Y | `[` / `]` |
 | START | Enter |
 | SELECT | Tab |
-| L / R | Volume down / up |
-| ZL | Menu |
-| ZR | Search |
+| L | Menu |
+| R | Search |
+| ZL / ZR (New 3DS) | Volume down / up |
 | HOME | Home |
 
 ## Installing
 
-Build output is assembled in `out/sd/`. Copy its contents to the root of the
+Build output is assembled in `out/release/` (`mksd.sh out/release --with-android`; it contains no third-party APKs, see `SHA256SUMS`). Copy its contents to the root of the
 3DS's SD card and boot `Cyano3DS.firm` from fastboot3DS (*Boot setup…* →
 slot → pick the payload, or *Boot from file…*).
 
@@ -78,7 +78,13 @@ boot slot pointing at your normal `boot.firm`.
 ## Building
 
 The build runs on Linux or WSL2 (Ubuntu). It needs the ARM cross-toolchains, a
-device-tree compiler, `qemu-user-static`, `cpio`, Python 3 and a JDK.
+device-tree compiler, `qemu-user-static`, `cpio`, Python 3 and a JDK. Nothing
+in the build needs root except installing those packages with `apt`.
+`bash port/scripts/check-deps.sh <stage>` lists anything missing, with the
+apt package name, before a stage starts.
+
+Stages run in this order. Step 3 (CM7.2) takes hours on the first run and is
+resumable. Steps 4 and 5 need its output.
 
 ```bash
 # 1. kernel: apply the port to a pristine linux-3ds tree and build
@@ -88,11 +94,14 @@ bash port/scripts/build-kernel.sh           # -> out/zImage, out/nintendo3ds_ktr
 # 2. FIRM payload + ARM9 firmware
 bash port/scripts/build-loader.sh           # -> out/Cyano3DS.firm, out/arm9linuxfw.bin
 
-# 3. userspace: build CM7.2 (needs the CyanogenMod source tree; see docs/BUILD.md)
-CM7_DIR=/path/to/cm7 bash port/scripts/build-cm7-source.sh
+# 3. userspace: CM7.2 in a rootless 12.04 chroot (see docs/BUILD.md step 4)
+bash port/scripts/cm7-rootless.sh           # tools, bootstrap, chroot, sync
+bash port/scripts/cm7-rootless.sh port build package   # -> out/android/{system,data}.img
+
+# 4. initramfs (needs step 3's out/cm7-init/; ALLOW_NO_ANDROID=1 to skip it)
 bash port/scripts/mkinitramfs.sh            # -> out/initramfs.cpio.gz
 
-# 4. assemble the card staging
+# 5. assemble the card staging (needs step 3's system.img and data.img)
 bash port/scripts/mksd.sh --with-android    # -> out/sd/
 ```
 

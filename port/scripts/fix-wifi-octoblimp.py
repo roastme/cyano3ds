@@ -32,6 +32,7 @@ It is idempotent: running it twice changes nothing.
 """
 
 import pathlib
+import os
 import re
 import shutil
 import sys
@@ -151,7 +152,7 @@ def remove_mainline_ath6kl_conflict(kd):
 
 def main():
     kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1
-                      else "/root/p3ds/src/linux-3ds")
+                      else os.path.expanduser("~/p3ds/src/linux-3ds"))
     if not (kd / "Makefile").exists():
         die("no kernel tree at %s" % kd)
 

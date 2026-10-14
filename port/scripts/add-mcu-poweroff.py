@@ -21,9 +21,10 @@ it sees KEY_POWER on the mcu_buttons input device.
 Idempotent.  Applies to the linux-3ds tree.
 """
 import pathlib
+import os
 import sys
 
-kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "/root/p3ds/src/linux-3ds")
+kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/p3ds/src/linux-3ds"))
 reg = kd / "drivers/platform/nintendo3ds/mcu/regulator.c"
 dtsi = kd / "arch/arm/boot/dts/nintendo3ds.dtsi"
 

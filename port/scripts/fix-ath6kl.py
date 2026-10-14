@@ -26,6 +26,7 @@ generic AR6002 firmware is NOT a substitute (different ROM function table).
 """
 
 import sys
+import os
 import pathlib
 import re
 
@@ -49,7 +50,7 @@ def replace_once_or_applied(s, old, new, marker, what):
 
 def main():
     kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1
-                      else "/root/p3ds/src/linux-3ds")
+                      else os.path.expanduser("~/p3ds/src/linux-3ds"))
     a = kd / "drivers/net/wireless/ath/ath6kl"
     if not (a / "core.h").exists():
         die("no ath6kl tree at %s" % a)

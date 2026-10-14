@@ -34,9 +34,10 @@ numbers and reported protocol version all match the 32-bit userspace.
 Idempotent.
 """
 import pathlib
+import os
 import sys
 
-kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "/root/p3ds/src/linux-3ds")
+kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~/p3ds/src/linux-3ds"))
 mk = kd / "drivers/android/Makefile"
 s = mk.read_text()
 

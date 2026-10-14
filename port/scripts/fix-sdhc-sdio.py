@@ -42,6 +42,7 @@ This script is idempotent.
 """
 
 import sys
+import os
 import pathlib
 
 def die(msg):
@@ -56,7 +57,7 @@ def replace_once(s, old, new, what):
 
 def main():
     kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1
-                      else "/root/p3ds/src/linux-3ds")
+                      else os.path.expanduser("~/p3ds/src/linux-3ds"))
     c = kd / "drivers/platform/nintendo3ds/ctr_sdhc.c"
     h = kd / "drivers/platform/nintendo3ds/ctr_sdhc.h"
     if not c.exists() or not h.exists():

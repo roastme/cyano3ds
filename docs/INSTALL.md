@@ -120,8 +120,32 @@ not run on the ARM11.
 
 Apps are installed, not auto-launched: open them from the launcher.
 
-**`/data` is not persistent yet.** App settings and save data do not survive a
-reboot; the app itself does, because it lives in `/system`.
+**`/data` is saved to the card.** `/data` runs in RAM, and the boot stage
+saves it as `android/data-cm7.tar` (settings, accounts, Wi-Fi networks, app
+data) and `android/data-cm7-apps.tar` (apps installed from inside Android).
+It saves every 60 s when something changed, before the console sleeps on lid
+close, and on a power-button shutdown, and restores both at boot. Holding the
+power button to force the console off loses at most the last minute.
+
+The card is also Android's external storage (`/mnt/sdcard`): the Camera saves
+to `DCIM/Camera`, and the Gallery and Music apps find files there.
+
+**Sleep:** closing the lid puts the console to sleep; opening it wakes it.
+This is a screen-off sleep: the backlights go off, the power LED breathes
+and the CPU idles until the lid opens. Wi-Fi stays powered and reconnects if
+the access point dropped it. The deeper whole-system sleep (`ctr_deep_sleep=1`
+on the kernel command line) is experimental: on hardware it did not wake up.
+
+**Screen timeout:** the screens never turn off on their own (the POWER button
+is a clean shutdown here, so nothing could turn them back on). For a timeout,
+put it in milliseconds in `CYANO3DS/screen-timeout`, e.g. `120000`.
+
+**Diagnostics:** about five minutes after Android starts, the boot stage writes
+`CYANO3DS/selftest.txt`, a PASS/FAIL report on lid sleep, Wi-Fi, audio,
+cameras, storage and `/data` saving. The top screen shows Android's warnings
+and errors live; put a logcat level letter (`V D I W E F`) in
+`CYANO3DS/console-log` to change it, or create `CYANO3DS/noconsolelog` to turn
+it off.
 
 ## 7. Troubleshooting
 

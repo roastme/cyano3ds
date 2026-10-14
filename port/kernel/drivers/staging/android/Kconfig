@@ -39,6 +39,27 @@ config ANDROID_LOGGER
 	  silently, which makes debugging a headless bring-up guesswork.
 	  From-scratch implementation, see drivers/staging/android/logger.c.
 
+config ANDROID_ALARM_DEV
+	bool "Android alarm driver (/dev/alarm)"
+	default y
+	help
+	  /dev/alarm, used by Gingerbread's AlarmManagerService and by
+	  libutils' elapsedRealtime().  Without it AlarmManagerService falls
+	  back to a Handler that never fires RTC alarms (no ACTION_TIME_TICK,
+	  so the status-bar clock and every RTC alarm stop).
+	  From-scratch implementation, see drivers/staging/android/alarm-dev.c.
+
+config ANDROID_FB_WAIT
+	bool "Android /sys/power/wait_for_fb_{sleep,wake}"
+	depends on PM
+	default y
+	help
+	  The display sleep/wake files Gingerbread's SurfaceFlinger watches.
+	  Without them SurfaceFlinger switches /dev/tty0 to a new VT in
+	  KD_GRAPHICS mode, which blanks the kernel console on the top screen.
+	  The display never sleeps on this port.
+	  See drivers/staging/android/fb-wait.c.
+
 config ANDROID_LOW_MEMORY_KILLER
 	bool "Android low memory killer"
 	depends on MMU

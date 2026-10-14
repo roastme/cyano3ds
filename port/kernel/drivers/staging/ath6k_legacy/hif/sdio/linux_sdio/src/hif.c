@@ -213,6 +213,24 @@ static int ath6kl_hifdev_suspend(struct device *dev)
 
 	device = ath6kl_get_hifdev(func);
 
+	/*
+	 * N3DS_WIFI_KEEP_POWER_SUSPEND: keep the AR6014 powered and running
+	 * through system sleep (as the 3DS itself does for StreetPass) and do
+	 * not touch it.  The driver's own suspend path cuts the chip's power
+	 * and would have to re-upload the NWM firmware on resume; on hardware
+	 * (2026-10-14) its SDIO reset timed out, the suspend was refused (-16)
+	 * and Wi-Fi stayed dead ("Wmi not ready") for the rest of the boot.
+	 * Kept powered, the association may survive the sleep; if the AP
+	 * drops it, wpa_supplicant simply reconnects after wake.
+	 */
+	if (device && (sdio_get_host_pm_caps(func) & MMC_PM_KEEP_POWER) &&
+	    !sdio_set_host_pm_flags(func, MMC_PM_KEEP_POWER)) {
+		device->is_suspend = true;
+		device->kept_power = true;
+		dev_info(dev, "AR6002 suspend: keeping the chip powered\n");
+		return 0;
+	}
+
 	if (device && device->claimedContext &&
 	    osdrvCallbacks.deviceSuspendHandler) {
 		/* set true first for PowerStateChangeNotify(..) */
@@ -243,6 +261,12 @@ static int ath6kl_hifdev_resume(struct device *dev)
 	struct hif_device *device;
 
 	device = ath6kl_get_hifdev(func);
+	if (device && device->kept_power) {
+		device->kept_power = false;
+		device->is_suspend = false;
+		dev_info(dev, "AR6002 resume: chip was kept powered\n");
+		return 0;
+	}
 	if (device && device->claimedContext &&
 	    osdrvCallbacks.deviceSuspendHandler) {
 		status = osdrvCallbacks.

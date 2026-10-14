@@ -34,6 +34,7 @@ AR6003/AR6004 are untouched.  Idempotent.
 """
 
 import sys
+import os
 import pathlib
 
 
@@ -222,7 +223,7 @@ def patch_text(path, subs, already_marker=None):
 
 def main():
     kd = pathlib.Path(sys.argv[1] if len(sys.argv) > 1
-                      else "/root/p3ds/src/linux-3ds")
+                      else os.path.expanduser("~/p3ds/src/linux-3ds"))
     ath = kd / "drivers/net/wireless/ath/ath6kl"
     if not ath.is_dir():
         die("no %s" % ath)

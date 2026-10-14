@@ -42,35 +42,30 @@ CM7.2 will not build on a modern host — make 4.x, Python 3 and JDK 17 all
 break it. The working recipe is an **Ubuntu 12.04 chroot** with OpenJDK 6, GNU
 make 3.81, Python 2.7 and gcc 4.6:
 
-The chroot and the CM7.2 tree are one-time, cached state — `setup-chroot.sh`
-creates them once and then skips them.  The flow scripts
-(`cleanup-cm7-tree.sh`, `apply-cm7-device.sh`, `stage-svox.sh`) are
-idempotent: re-run them after pulling any port update.  `cr-run.sh` runs the
-chroot steps and self-escalates to root; after a WSL restart, run it once to
-re-make the chroot's `/proc`, `/sys`, `/dev` bind mounts before building.
+The chroot and the CM7.2 tree are one-time, cached state. `cm7-rootless.sh`
+creates them once and resumes them. It needs no root: the chroot runs under
+`proot`, and debootstrap's first stage runs under `fakeroot`. The stages are
+`tools`, `bootstrap`, `chroot`, `sync`, `port`, `build` and `package`, and
+`run 'cmd'` runs a command inside the chroot. See [BUILD.md](BUILD.md) step 4.
 
 ```bash
-# inside the chroot
-repo init -u https://github.com/CyanogenMod/android.git -b gb-release-7.2
-repo sync
-bash /path/to/port/scripts/apply-cm7-device.sh /path/to/cm7
-cd /path/to/cm7 && . build/envsetup.sh && lunch cyanogen_nintendo3ds-userdebug && make droidcore -j2
-
-# back on the host
-CM7_DIR=/path/to/cm7 bash port/scripts/build-cm7-source.sh
+bash port/scripts/cm7-rootless.sh                 # tools, bootstrap, chroot, sync
+bash port/scripts/cm7-rootless.sh port            # device tree, svox staging
+bash port/scripts/cm7-rootless.sh build           # lunch + make droidcore -j2 (inside the chroot)
+bash port/scripts/cm7-rootless.sh package         # out/android/*.img, out/cm7-init/
 bash port/scripts/mkinitramfs.sh
 bash port/scripts/mksd.sh --with-android
 ```
 
 The CM fork of `external/svox` was removed from GitHub, so the manifest drops
 that project and the AOSP `android-2.3.7_r1` source is staged in its place.
-(`setup-chroot.sh` installs `port/cm7-local-manifests/remove-broken.xml`, which
-also drops `android_hardware_ti_wpan` — it has no `gb-release-7.2` branch — and
-`stage-svox.sh` does the AOSP svox staging.)
+(`cm7-rootless.sh sync` installs `port/cm7-local-manifests/remove-broken.xml`,
+which also drops `android_hardware_ti_wpan` — it has no `gb-release-7.2`
+branch — and `stage-svox.sh` does the AOSP svox staging.)
 
-The chroot is Python 2.7, so it needs a Python-2-compatible `repo` tool:
-`setup-chroot.sh` installs v2.7 (the last such release) and sets `REPO_REV=v2.7`
-so the launcher's self-bootstrap doesn't upgrade to a Python-3-only version.
+The sync runs on the host with the current `repo` launcher (Python 3). The
+gb-release-7.2 manifest is a plain manifest, so the Python 2 `repo` v2.7 is not
+needed. The chroot is Python 2.7 and only builds.
 
 **Use `make droidcore`, not `brunch nintendo3ds`.**  `brunch` / `make bacon`
 are guarded by `ifneq ($(TARGET_NO_KERNEL),true)` in `build/core/Makefile`,
@@ -106,12 +101,11 @@ nothing bootable:
    (The cleanup script deliberately leaves `external/svox` alone now.)
 7. **The 32-bit host tools need hand-made `.so` symlinks.** precise has no
    32-bit libstdc++/zlib *dev* packages, so `aidl`/`aapt` fail to link until
-   `setup-chroot.sh` points `libstdc++.so`/`libz.so` at the 32-bit runtimes.
+   the `chroot` stage points `libstdc++.so`/`libz.so` at the 32-bit runtimes.
 8. **`gperf` is required** (libwebcore's `CSSValueKeywords.h` generation) and is
    in the chroot's package list.
-9. **The build runs as root in the chroot, so `out/` is root-owned.**
-   `sudo chown -R $USER $CM7_DIR/out` before `build-cm7-source.sh`, which
-   edits files under `out/`.
+9. **The build runs under `proot -0`, so `out/` stays owned by your user.**
+   Nothing needs a `chown` any more.
 
 ## Kernel support used by CM7
 
@@ -148,12 +142,40 @@ card**. CM7's ALSA HAL (`BOARD_USES_ALSA_AUDIO`) then plays through `/dev/snd`.
 The CSND channel is mono, so the driver downmixes the interleaved ALSA ring.
 Playback is correct-pitch mono.
 
+The hardware programming follows Android3DS/Octoblimp's `ctr_csnd.c`, which is
+verified to make sound on a real console: their codec bring-up (both I2S lines
+at 32.73 kHz, no EQ upload), their output-stage monitor that re-arms the
+speaker path if it drops during a stream, and the microphone (the DSi MIC
+block at 0x10162000, drained by a 1 ms timer) as the card's ALSA capture
+stream, which `AndroidCapture` in `asound.conf` already points at.
+
+## Camera
+
+`ctr_cam.c` is Android3DS/Octoblimp's MT9V113 capture driver (`/dev/ctr_cam`,
+one YUYV frame per `read()`). CM7 was built with the stub camera, so
+`port/userland/camera/build-camera-hal.sh` rebuilds CM7's own
+`libcameraservice.so` with Octoblimp's HAL (`CameraHardwareN3ds`, moved to
+Gingerbread) in place of the stub, against CM7's libraries from `system.img`.
+Copy the result to `CYANO3DS/libcameraservice.so`: the boot stage installs card
+`.so` files over `/system/lib`, and deleting the file brings the stub back.
+Camera id 0 is the outer right sensor (back), id 1 the inner one (front).
+Preview is RGB565 (without copybit, libagl shows NV21 as grey).
+
+## External storage
+
+The boot stage owns the card, so Android's `vold` cannot mount it. Instead the
+card is mounted with vold's owner (`system:sdcard_rw`, mask `0002`; vold's
+`0702` would lock system_server out of the card APKs in `/system/app`),
+bound at `/mnt/sdcard`, and `/bin/fakevold` takes vold's place in `init.rc`
+and answers MountService with "sdcard /mnt/sdcard mounted". The kernel gets
+Android's `VFAT_IOCTL_GET_VOLUME_ID`, which MediaProvider needs.
+
 ## Input and the screen
 
 The touchscreen uses the direct-touch evdev driver from Android3DS/Octoblimp
 (median of the FIFO samples, `INPUT_PROP_DIRECT`, fixed calibration), with the
 circle pad on a separate trackball device. Buttons are mapped through
-`qwerty.kl`; A is OK, B is Back, ZL is Menu, ZR is Search and HOME is Home.
+`qwerty.kl`; A is OK, B is Back, L is Menu, R is Search, ZL/ZR are Volume down/up and HOME is Home.
 
 CM7's screen-timeout would turn the panel off and then drop all input. A small
 helper (`com.cyano3ds.PortHelper`, built as `/bin/porthelper.jar` by
@@ -165,8 +187,9 @@ refreshes user activity, which keeps the screen on. A card file
 
 - The boot stage pre-optimises the system apps and saves the result to
   `android/dalvik.tar`, so the first boot is slow and later boots are faster.
-- **`/data` is a small tmpfs**, seeded from `data.img`; app data does not
-  persist yet. Watch `No space left on device` in the logs.
+- **`/data` is a small tmpfs**, seeded from `data.img` and restored from the
+  `android/data-cm7*.tar` saves (see [INSTALL.md](INSTALL.md)). Watch
+  `No space left on device` in the logs.
 - CM ships extras that need hardware the 3DS does not have (DSPManager, FM,
   camera, Bluetooth, CMStats/updates, `rild`). They should fail gracefully;
   anything that crash-loops can be removed from `/system/app`.
@@ -175,7 +198,8 @@ refreshes user activity, which keeps the screen on. A card file
 
 - Boots to ADWLauncher + SystemUI; Settings, Contacts and Calculator run.
 - Touch, buttons, audio and the battery indicator work.
+- Lid sleep, the microphone and the cameras are new (2026-10-14) and need
+  checking on hardware: read `CYANO3DS/selftest.txt` after a boot.
 - Wi-Fi is being brought up (driver and firmware load; joining a network is
   the remaining piece).
-- No GPU, no second Android screen, no sleep, no camera — see
-  [SCOPE.md](SCOPE.md).
+- No GPU, no second Android screen — see [SCOPE.md](SCOPE.md).

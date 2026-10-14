@@ -40,6 +40,12 @@ for a in "$@"; do
 	esac
 done
 OUT="${OUT:-$REPO/out/sd}"
+# The first argument is the destination, never the build dir (C-18).
+if [ "$(realpath -m "$OUT")" = "$(realpath -m "$DIST")" ]; then
+	echo "mksd.sh: destination '$OUT' is the build output dir ($DIST)." >&2
+	echo "         Pass another directory, or omit it to use $REPO/out/sd." >&2
+	exit 2
+fi
 
 ANDROID_FLAVOR="${ANDROID_FLAVOR:-cm7}"
 case "$ANDROID_FLAVOR" in
@@ -74,9 +80,18 @@ if [ "$WITH_ANDROID" = 1 ] || [ -f "$REPO/out/android/system.img" ]; then
 		src="$REPO/out/android/$img.img"
 		if [ -f "$src" ]; then
 			cp "$src" "$OUT/android/$img.img"
-		elif [ ! -f "$OUT/android/$img.img" ]; then
-			truncate -s 192M "$OUT/android/$img.img"
-			mkfs.ext4 -q -L "$img" -F "$OUT/android/$img.img"
+		elif [ "${ALLOW_EMPTY_ANDROID:-0}" = 1 ]; then
+			# Empty images boot to a blank /system.  Only for testing the card layout.
+			echo "    WARNING: $src missing, writing an EMPTY $img.img (ALLOW_EMPTY_ANDROID=1)" >&2
+			[ -f "$OUT/android/$img.img" ] || {
+				truncate -s 192M "$OUT/android/$img.img"
+				mkfs.ext4 -q -L "$img" -F "$OUT/android/$img.img"
+			}
+		else
+			echo "mksd.sh: $src is missing: no Android image to put on the card." >&2
+			echo "         Build it with: bash port/scripts/cm7-rootless.sh package" >&2
+			echo "         (or set ALLOW_EMPTY_ANDROID=1 to stage an empty placeholder)." >&2
+			exit 1
 		fi
 	done
 	ls -lh "$OUT/android" | sed 's/^/  /'

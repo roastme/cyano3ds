@@ -39,6 +39,8 @@ install -m 644 "$SRC/android-staging/ashmem-v5.4.c" "$KD/drivers/staging/android
 install -m 644 "$SRC/android-staging/ashmem.h"     "$KD/drivers/staging/android/ashmem.h"
 install -m 644 "$SRC/android-staging/uapi-ashmem.h" "$KD/include/uapi/linux/ashmem.h"
 install -m 644 "$PORT/kernel/drivers/staging/android/logger.c" "$KD/drivers/staging/android/logger.c"
+install -m 644 "$PORT/kernel/drivers/staging/android/alarm-dev.c" "$KD/drivers/staging/android/alarm-dev.c"
+install -m 644 "$PORT/kernel/drivers/staging/android/fb-wait.c" "$KD/drivers/staging/android/fb-wait.c"
 install -m 644 "$PORT/kernel/drivers/staging/android/Kconfig"  "$KD/drivers/staging/android/Kconfig"
 install -m 644 "$PORT/kernel/drivers/staging/android/Makefile" "$KD/drivers/staging/android/Makefile"
 
@@ -437,8 +439,8 @@ config CTR_EXTRAPAD
 	  On the New 3DS, ZL/ZR are not in the HID_PAD register (bits 14/15
 	  there are the IRQ-enable/condition bits); the chip that reports them
 	  is on I2C bus 2 = 0x10148000 (GBATEK "2:54h", the IR/gyro bus),
-	  7-bit address 0x2A.  Read it and report ZL as KEY_MENU and ZR as
-	  KEY_SEARCH input events.
+	  7-bit address 0x2A.  Read it and report ZL as KEY_VOLUMEDOWN and ZR as
+	  KEY_VOLUMEUP input events.
 
 '''
     i = s.rindex("\nendif")
@@ -450,7 +452,9 @@ else:
     s2 = s.replace("at 2:0x54, the same bus as the MCU.  Read them and report",
                    "at bus 2 = 0x10148000 (the IR/gyro bus), 7-bit address 0x2A.")
     s2 = s2.replace("Read it and report KEY_BACK / KEY_SEARCH input",
-                    "Read it and report ZL as KEY_MENU and ZR as KEY_SEARCH input")
+                    "Read it and report ZL as KEY_VOLUMEDOWN and ZR as KEY_VOLUMEUP input")
+    s2 = s2.replace("Read it and report ZL as KEY_MENU and ZR as KEY_SEARCH input",
+                    "Read it and report ZL as KEY_VOLUMEDOWN and ZR as KEY_VOLUMEUP input")
     if s2 != s:
         kc.write_text(s2)
         print("    drivers/platform/nintendo3ds/Kconfig: updated CTR_EXTRAPAD text")
@@ -484,7 +488,7 @@ else:
     s += """
 /* New 3DS ZL/ZR (and C-stick): I2C bus 2 = 0x10148000 (IR/gyro).
  * ZL/ZR are not in HID_PAD; ctr_extrapad reads the I2C device and reports
- * ZL as KEY_MENU and ZR as KEY_SEARCH.
+ * ZL as KEY_VOLUMEDOWN and ZR as KEY_VOLUMEUP.
  */
 &i2c3 {
 	extrapad@2a {
@@ -581,6 +585,26 @@ if "nintendo,3ds-snd" not in s:
 else:
     print("    dtsi: sound node already present")
 PY
+
+# Sleep mode: closing the lid suspends to RAM through PDN sleep and opening it
+# (or any MCU interrupt) wakes the console, following open_agb_firm's lid
+# sleep (profi200/open_agb_firm PR 295, profi200/libn3ds PR 9).  pm.c adds CPU
+# hotplug and the PDN suspend ops, ctr_lid.c the lid trigger and the MCU half
+# of the sequence; fb-wait.c (above) tells SurfaceFlinger to stop and resume
+# drawing around every suspend.
+install -m 644 "$PORT/kernel/arch/arm/mach-ctr/pm.c" "$KD/arch/arm/mach-ctr/pm.c"
+install -m 644 "$PORT/kernel/drivers/platform/nintendo3ds/ctr_lid.c" \
+	"$KD/drivers/platform/nintendo3ds/ctr_lid.c"
+python3 "$PORT/scripts/add-ctr-sleep.py" "$KD"
+
+# Cameras: Android3DS/Octoblimp's MT9V113 capture driver (/dev/ctr_cam).
+install -m 644 "$PORT/kernel/drivers/platform/nintendo3ds/ctr_cam.c" \
+	"$KD/drivers/platform/nintendo3ds/ctr_cam.c"
+python3 "$PORT/scripts/add-ctr-cam.py" "$KD"
+
+# Android's VFAT_IOCTL_GET_VOLUME_ID, for MediaProvider once the card is
+# reported mounted (fakevold).
+python3 "$PORT/scripts/add-vfat-android-volume-id.py" "$KD"
 
 # ---------------------------------------------------------------------------
 say "10/10  kernel: Nintendo 3DS WiFi (Octoblimp staging ath6k + AR6014/NWM)"
