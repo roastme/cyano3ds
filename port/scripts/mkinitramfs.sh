@@ -30,7 +30,8 @@ MINIMAL_DIAGNOSTICS="${MINIMAL_DIAGNOSTICS:-0}"
 # userspace files (the boot-stage directory, the /data restore tar name and the
 # user-visible log strings) differ.  Default is CM7.2, the current target; the
 # archived prebuilt flavors are still selectable with ANDROID_FLAVOR=froyo or
-# ANDROID_FLAVOR=gingerbread.
+# ANDROID_FLAVOR=gingerbread; ANDROID_FLAVOR=cm6 is the CyanogenMod 6 (Froyo)
+# source build for the old 3DS (out/cm6-init).
 # ---------------------------------------------------------------------------
 ANDROID_FLAVOR="${ANDROID_FLAVOR:-cm7}"
 case "$ANDROID_FLAVOR" in
@@ -43,6 +44,11 @@ case "$ANDROID_FLAVOR" in
 		ANDROID_NAME="Android 2.3.3 (Gingerbread)"
 		ADIR="gingerbread-init"
 		DATATAR="data-gingerbread.tar"
+		;;
+	cm6)
+		ANDROID_NAME="Android 2.2 (CyanogenMod 6)"
+		ADIR="cm6-init"
+		DATATAR="data-cm6.tar"
 		;;
 	froyo)
 		ANDROID_NAME="Android 2.2 (Froyo)"
@@ -3325,7 +3331,7 @@ sed -i \
 	-e "s/@@ANDROID_NAME@@/$ANDROID_NAME/g" \
 	-e "s/@@DATATAR@@/$DATATAR/g" \
 	"$ROOT/init"
-if [ "$ANDROID_FLAVOR" != "froyo" ]; then
+if [ "$ANDROID_FLAVOR" != "froyo" ] && [ "$ANDROID_FLAVOR" != "cm6" ]; then
 	# Gingerbread's boot classpath also carries bouncycastle.jar and
 	# core-junit.jar.  The generated /init hardcodes the Froyo boot classpath
 	# pre-dexopt and for the `svc`/app_process helpers; app_process refuses to
