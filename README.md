@@ -1,7 +1,8 @@
 # Cyano3DS
 
 CyanogenMod 7.2 (Android 2.3.7, API 10) running natively on the **New Nintendo
-3DS / New 3DS XL / New 2DS XL**.
+3DS / New 3DS XL / New 2DS XL**, 
+and CyanogenMod 6 running on the Old 3DS via an experimental build.
 
 Cyano3DS is not an emulator and not a Horizon app. `firm_linux_loader` starts a
 linux-3ds kernel, and Android's own init, Dalvik, SurfaceFlinger and framework
@@ -32,7 +33,7 @@ from fastboot3DS or Luma3DS; nothing on the NAND is written.
 | Storage | read-only `/system` image; `/data` seeded from the card at boot |
 | Battery / RTC | MCU (`BAT0`/`ADP0`) |
 | CPU | 804 MHz, all four cores (New 3DS) |
-| Wi-Fi | AR6014G driver (pre-mainline staging AR6K) + Nintendo NWM firmware; joining a network is still being brought up |
+| Wi-Fi | AR6014G driver (pre-mainline staging AR6K) + Nintendo NWM firmware |
 
 ## Not working yet
 
@@ -42,7 +43,6 @@ from fastboot3DS or Luma3DS; nothing on the NAND is written.
   kernel console.
 - **No sleep/suspend.** The port keeps the screen awake because there is no
   resume path on this hardware.
-- **Wi-Fi station mode** is not finished. See [docs/WIFI.md](docs/WIFI.md).
 - **No camera** (CM's camera is a stub), no Bluetooth, GPS, sensors or
   telephony. The camera app currently crashes.
 
