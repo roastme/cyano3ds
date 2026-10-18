@@ -16,12 +16,12 @@ say() { printf '\n==> %s\n' "$*"; }
 	echo "no CyanogenMod tree at $CM6_DIR" >&2
 	exit 1; }
 
-say "1/7  device/nintendo/ctr"
+say "1/8  device/nintendo/ctr"
 mkdir -p "$CM6_DIR/device/nintendo/ctr"
 cp -a "$REPO/port/userland/device-cm6/ctr/." "$CM6_DIR/device/nintendo/ctr/"
 ls "$CM6_DIR/device/nintendo/ctr/" | sed 's/^/    /'
 
-say "2/7  vendor/cyanogen/products/cyanogen_ctr.mk"
+say "2/8  vendor/cyanogen/products/cyanogen_ctr.mk"
 P="$CM6_DIR/vendor/cyanogen/products"
 cp "$REPO/port/vendor/cm6/products/cyanogen_ctr.mk" "$P/"
 # The manifest drops every other CM6 device tree (device/htc/..., samsung, ...),
@@ -45,7 +45,7 @@ else:
     print("    common.mk: already patched (or nothing to do)")
 PY
 
-say "3/7  register the lunch combo"
+say "3/8  register the lunch combo"
 VS="$CM6_DIR/vendor/cyanogen/vendorsetup.sh"
 if [ -f "$VS" ] && ! grep -q "cyanogen_ctr" "$VS"; then
 	sed -i '1i add_lunch_combo cyanogen_ctr-eng' "$VS"
@@ -54,7 +54,7 @@ else
 	echo "    already registered"
 fi
 
-say "4/7  toolchain name"
+say "4/8  toolchain name"
 # froyo-stable's manifest tracks platform/prebuilt at master, which today only
 # ships arm-eabi-4.4.3; Froyo's combo/TARGET_linux-arm.mk wants arm-eabi-4.4.0.
 # 4.4.3 is a drop-in point release.
@@ -66,7 +66,7 @@ else
 	echo "    ok"
 fi
 
-say "5/7  modules that need projects the manifest drops"
+say "5/8  modules that need projects the manifest drops"
 # Host-side modules that need jars (ddmlib, kxml2, layoutlib_api, ninepatch)
 # from the dropped sdk project: framework host tests, Eclipse layoutlib.  And
 # external/openvpn, which needs the external/lzo project (not in the manifest).
@@ -77,7 +77,7 @@ for m in frameworks/base/core/tests/hosttests frameworks/base/tools/layoutlib/br
 	fi
 done
 
-say "6/7  kernel notice file"
+say "6/8  kernel notice file"
 # The notice-file rules want the prebuilt kernel's licence even on a
 # TARGET_NO_KERNEL board.  The kernel here is linux-3ds (GPL-2.0).
 K="$CM6_DIR/prebuilt/android-arm/kernel"
@@ -91,9 +91,20 @@ if [ ! -f "$K/LINUX_KERNEL_COPYING" ]; then
 	echo "    created LINUX_KERNEL_COPYING"
 fi
 
-say "7/7  dx heap"
+say "7/8  dx heap"
 # The build's dx call asks for -Xmx1536M.  A 32-bit JVM (the i386 chroot) cannot
 # reserve that much contiguous address space next to proot's mappings
 # ("Could not reserve enough space for object heap").
 sed -i 's/-JXms16M -JXmx1536M/-JXms16M -JXmx768M/' "$CM6_DIR/build/core/definitions.mk"
 grep -n 'JXmx' "$CM6_DIR/build/core/definitions.mk" | sed 's/^/    /'
+
+say "8/8  sound, Wi-Fi and low-memory tuning for the 3DS hardware"
+# Froyo has no ALSA HAL and its Wi-Fi HAL insmods a module; the 3DS kernel has
+# both drivers built in.  Each script is idempotent.
+python3 "$REPO/port/scripts/fix-cm6-audio.py"    "$CM6_DIR"
+python3 "$REPO/port/scripts/fix-cm7-wifi.py"     "$CM6_DIR"
+python3 "$REPO/port/scripts/fix-cm7-wpa-wext.py" "$CM6_DIR"
+# system_server cannot write other uids' /proc/<pid>/oom_adj; relay to /bin/memguard.
+python3 "$REPO/port/scripts/fix-cm6-oomadj.py"   "$CM6_DIR"
+# keep 3 hidden apps instead of 15
+python3 "$REPO/port/scripts/fix-cm6-lowmem.py"   "$CM6_DIR"

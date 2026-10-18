@@ -206,6 +206,14 @@ static void __init ctr_cpuclk_init(struct device_node *np)
 	info = readw(socinfo);
 	iounmap(socinfo);
 
+	/*
+	 * An old-3DS device tree (nintendo,ctr) means "behave like an old 3DS"
+	 * even when this is a New 3DS booted with the CM6 loader: fixed 268 MHz,
+	 * no cpufreq.
+	 */
+	if (of_machine_is_compatible("nintendo,ctr"))
+		info = 0;
+
 	if (info & BIT(2)) {		/* retail New 3DS (LGR2) */
 		c->mode_slow = 1;
 		c->mode_fast = 5;

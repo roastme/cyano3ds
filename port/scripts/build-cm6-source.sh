@@ -195,6 +195,31 @@ on init
 on boot
     setprop ro.sf.lcd_density 120
     setprop ro.hardware ctr
+    setprop wifi.interface wlan0
+    mkdir /data/misc/dhcp 0777 dhcp dhcp
+    chmod 0777 /data/misc/dhcp
+    # wpa_ctrl_open() binds its client socket here; without the directory
+    # every connect fails with ENOENT and Wi-Fi never gets past "Turning on"
+    mkdir /data/misc/wifi/sockets 0770 wifi wifi
+    chmod 0770 /data/misc/wifi/sockets
+
+# ---------------------------------------------------------------------------
+# Wi-Fi: Atheros AR6014G on SDIO, driven by the in-kernel ath6kl (cfg80211 +
+# CFG80211_WEXT), so Froyo's wpa_supplicant_6 runs with the "wext" driver.
+# The control socket must be wpa_<ctrl_interface> (wpa_ctrl.c / wifi.c).
+# dhcpcd is started by libnetutils as "dhcpcd:wlan0" (ctl.start with dynamic
+# args, which Froyo's init only accepts for oneshot services); mkinitramfs.sh
+# swaps /system/bin/dhcpcd for /bin/dhcpcd_wlan0.sh, the root-side property
+# publisher that also starts the real dhcpcd (see N3DS_CM7_DHCP_PROPERTY_PUBLISHER).
+# ---------------------------------------------------------------------------
+service wpa_supplicant /system/bin/wpa_supplicant -Dwext -d -t -iwlan0 -c/data/misc/wifi/wpa_supplicant.conf
+    socket wpa_wlan0 dgram 660 wifi wifi
+    disabled
+    oneshot
+
+service dhcpcd /system/bin/dhcpcd -dd -f /system/etc/dhcpcd/dhcpcd.conf
+    disabled
+    oneshot
 '''
 dst.write_text(s)
 print("    init.rc: mounts disabled, servicemanager fixed, 3DS section added")

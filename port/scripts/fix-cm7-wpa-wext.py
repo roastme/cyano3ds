@@ -45,8 +45,14 @@
 #   * stops a failed private ioctl from counting towards the HANGED threshold
 #     (a missing SIOCSIWPRIV command set is "unsupported", not a hung driver).
 #
+# CyanogenMod 6 (Froyo) ships the same driver_wext.c with the same Android
+# additions, except that its flag is called driver_is_loaded (no
+# driver_is_started, no STARTED/STOPPED events), so the same patch is applied
+# to the CM6 tree with those names substituted (detected automatically).
+#
 # Usage:
 #   python3 port/scripts/fix-cm7-wpa-wext.py [CM7_DIR]   # default /root/p3ds/cm7
+#   python3 port/scripts/fix-cm7-wpa-wext.py CM6_DIR     # CyanogenMod 6 tree
 #
 # Idempotent: safe to run repeatedly.
 
@@ -229,6 +235,23 @@ def main() -> int:
     orig = s
     applied = []
 
+    helper, call_anchor, call_insert = HELPER, CALL_ANCHOR, CALL_INSERT
+    if "driver_is_started" not in s and "driver_is_loaded" in s:
+        # CM6 / Froyo spelling
+        helper = (HELPER
+                  .replace("\t\tdrv->driver_is_started = TRUE;\n"
+                           "\t\twpa_msg(drv->ctx, MSG_INFO, WPA_EVENT_DRIVER_STATE \"STARTED\");\n",
+                           "\t\tdrv->driver_is_loaded = TRUE;\n")
+                  .replace("\t\tif (drv->driver_is_started) {\n"
+                           "\t\t\tdrv->driver_is_started = FALSE;\n"
+                           "\t\t\twpa_msg(drv->ctx, MSG_INFO,\n"
+                           "\t\t\t\tWPA_EVENT_DRIVER_STATE \"STOPPED\");\n"
+                           "\t\t}\n",
+                           "\t\tdrv->driver_is_loaded = FALSE;\n"))
+        call_anchor = CALL_ANCHOR.replace("driver_is_started", "driver_is_loaded")
+        call_insert = CALL_INSERT.replace("driver_is_started", "driver_is_loaded")
+        assert "driver_is_started" not in helper
+
     # 0. the generic handler opens a sysfs file; this file predates os_open()
     if "[3ds] open()/O_RDONLY" not in s:
         if INCLUDE_ANCHOR not in s:
@@ -244,25 +267,30 @@ def main() -> int:
             print("cannot find wpa_driver_priv_driver_cmd() in %s" % DRIVER,
                   file=sys.stderr)
             return 1
-        s = s.replace(FUNC_ANCHOR, HELPER + FUNC_ANCHOR, 1)
+        s = s.replace(FUNC_ANCHOR, helper + FUNC_ANCHOR, 1)
         applied.append("added wpa_driver_wext_generic_cmd()")
 
     # 2. call the helper from wpa_driver_priv_driver_cmd()
     if "cfg80211 wext-compat has no SIOCSIWPRIV" not in s:
-        if CALL_ANCHOR not in s:
+        if call_anchor not in s:
             print("cannot find driver_is_started guard in %s" % DRIVER,
                   file=sys.stderr)
             return 1
-        s = s.replace(CALL_ANCHOR, CALL_INSERT, 1)
+        s = s.replace(call_anchor, call_insert, 1)
         applied.append("wpa_driver_priv_driver_cmd(): generic command path")
 
     # 3. never escalate a failed private ioctl to CTRL-EVENT-DRIVER-STATE HANGED
     if "not a hung driver" not in s:
-        if ERR_ANCHOR not in s:
+        err_anchor, err_replace = ERR_ANCHOR, ERR_REPLACE
+        if err_anchor not in s:
+            # CM6 brace style: "}\n\telse {"
+            err_anchor = ERR_ANCHOR[:-len("\t} else {")] + "\t}\n\telse {"
+            err_replace = ERR_REPLACE[:-len("\t} else {")] + "\t}\n\telse {"
+        if err_anchor not in s:
             print("cannot find SIOCSIWPRIV error branch in %s" % DRIVER,
                   file=sys.stderr)
             return 1
-        s = s.replace(ERR_ANCHOR, ERR_REPLACE, 1)
+        s = s.replace(err_anchor, err_replace, 1)
         applied.append("SIOCSIWPRIV failure no longer counts towards HANGED")
 
     if s != orig:

@@ -19,17 +19,26 @@ PRODUCT_PACKAGES += \
     libGLESv1_CM \
     libGLESv2 \
     libGLES_android \
-    gralloc.default
+    gralloc.default \
+    wpa_supplicant \
+    wpa_cli \
+    dhcpcd \
+    dhcpcd-run-hooks
+
 
 PRODUCT_COPY_FILES += \
     frameworks/base/data/etc/handheld_core_hardware.xml:system/etc/permissions/handheld_core_hardware.xml \
-    frameworks/base/data/etc/android.hardware.touchscreen.xml:system/etc/permissions/android.hardware.touchscreen.xml
+    frameworks/base/data/etc/android.hardware.touchscreen.xml:system/etc/permissions/android.hardware.touchscreen.xml \
+    frameworks/base/data/etc/android.hardware.wifi.xml:system/etc/permissions/android.hardware.wifi.xml \
+    device/nintendo/ctr/wifi/wpa_supplicant.conf:system/etc/wifi/wpa_supplicant.conf \
+    device/nintendo/ctr/wifi/dhcpcd.conf:system/etc/dhcpcd/dhcpcd.conf
 
 PRODUCT_PROPERTY_OVERRIDES += \
     ro.sf.lcd_density=120 \
     qemu.sf.lcd_density=120 \
     ro.opengles.version=65536 \
     ro.hardware=ctr \
+    wifi.interface=wlan0 \
     ro.board.platform=ctr \
     ro.telephony.default_network=0 \
     ro.kernel.android.checkjni=0 \

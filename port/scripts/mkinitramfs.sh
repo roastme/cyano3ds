@@ -153,7 +153,7 @@ INIT_APPLETS="sh mount umount ln ls cat echo sleep dmesg tee sync mkdir mknod
              chmod chown rm mv cp df stat true false
              grep tail head cut tr hexdump dd wc ps free kill pidof poweroff
              reboot basename dirname readlink sed test awk date sort nice
-             tar timeout unzip"
+             tar timeout unzip mkfifo mkswap swapon"
 for a in $INIT_APPLETS; do
 	ln -sf busybox "$ROOT/bin/$a"
 done
@@ -1260,6 +1260,250 @@ PUBLISHER
 	if grep -q "^service dhcpcd_wlan0 /bin/dhcpcd_wlan0.sh" "$ROOT/init.rc"; then
 		echo "    init.rc: dhcpcd_wlan0 -> /bin/dhcpcd_wlan0.sh (property publisher)"
 	fi
+	# Froyo (CM6) names the service plain "dhcpcd" (dhcp_utils.c starts
+	# "dhcpcd:wlan0" and waits for init.svc.dhcpcd == running).
+	sed -i 's|^service dhcpcd /system/bin/dhcpcd |service dhcpcd /bin/dhcpcd_wlan0.sh # was: /system/bin/dhcpcd |' "$ROOT/init.rc"
+	if grep -q "^service dhcpcd /bin/dhcpcd_wlan0.sh" "$ROOT/init.rc"; then
+		echo "    init.rc: dhcpcd -> /bin/dhcpcd_wlan0.sh (property publisher)"
+	fi
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	if [ "$ANDROID_FLAVOR" = cm6 ]; then
+		cat > "$ROOT/bin/memguard" <<'MEMGUARD'
+#!/bin/sh
+# memguard - zram swap, oom priorities and a userspace low-memory killer.
+# Runs as a root init.rc service, so PATH does not include /bin yet.
+export PATH=/bin:/sbin:$PATH
+LOG=/mnt/sd/CYANO3DS/memguard.log
+[ -d /mnt/sd/CYANO3DS ] || LOG=/dev/null
+
+L() {
+	echo "$(date +%T) $*" >> "$LOG"
+}
+
+# thresholds, kB of MemAvailable.  A game (foreground process with a huge
+# address space) gets much earlier kills: the 128 MB device cannot afford to
+# keep cached apps while it loads textures.  When the swap is nearly full no
+# more can be compressed away, so everything is raised too.
+T1=10240     # kill hidden/empty apps (adj >= 7)
+T2=6144      # also the home app and services (adj >= 4)
+T3=4096      # also secondary services (adj >= 2); never the IME, phone, system
+HEAVY_PAGES=30000   # foreground VmSize (4 kB pages) that counts as a game
+COOLDOWN=2   # seconds between kills
+
+# ---- zram swap ----------------------------------------------------------
+if [ -d /sys/block/zram0 ]; then
+	if [ ! -b /dev/zram0 ]; then
+		MM=$(cat /sys/block/zram0/dev)
+		mknod /dev/zram0 b "${MM%:*}" "${MM#*:}"
+	fi
+	echo lz4 > /sys/block/zram0/comp_algorithm 2>/dev/null
+	echo 64M > /sys/block/zram0/disksize
+	if mkswap /dev/zram0 > /dev/null 2>&1 && swapon -p 100 /dev/zram0 2>/dev/null; then
+		L "zram swap on: $(cat /sys/block/zram0/comp_algorithm)"
+	else
+		L "zram swap FAILED"
+	fi
+	echo 100 > /proc/sys/vm/swappiness 2>/dev/null
+	echo 2048 > /proc/sys/vm/min_free_kbytes 2>/dev/null
+	echo 0 > /proc/sys/vm/page-cluster 2>/dev/null
+else
+	L "no /sys/block/zram0: kernel without CONFIG_ZRAM"
+fi
+
+# ---- oom priority FIFO ---------------------------------------------------
+rm -f /dev/oomadj
+mkfifo /dev/oomadj
+chown 1000:1000 /dev/oomadj
+chmod 0620 /dev/oomadj
+exec 3<>/dev/oomadj
+
+APPLIED=0
+
+# apply_adj PID ADJ: legacy oom_adj (-17..15) -> oom_score_adj
+apply_adj() {
+	case "$1$2" in
+		''|*[!0-9-]*) return ;;
+	esac
+	[ -d "/proc/$1" ] || return
+	if [ "$2" -le -17 ]; then
+		S=-1000
+	else
+		S=$(($2 * 1000 / 17))
+	fi
+	echo "$S" > "/proc/$1/oom_score_adj" 2>/dev/null
+	APPLIED=$((APPLIED + 1))
+	[ "$2" -eq 0 ] && FGPID=$1
+}
+
+# protect: processes Android cannot live without
+protect() {
+	for N in system_server zygote servicemanager mediaserver; do
+		case $N in
+			system_server) V=-900 ;;
+			*) V=-600 ;;
+		esac
+		for P in $(pidof $N 2>/dev/null); do
+			echo "$V" > "/proc/$P/oom_score_adj" 2>/dev/null
+		done
+	done
+}
+
+AVAIL=0
+SWAPFREE=0
+read_mem() {
+	while read -r K V U; do
+		case $K in
+			MemAvailable:) AVAIL=$V ;;
+			SwapFree:) SWAPFREE=$V ;;
+		esac
+	done < /proc/meminfo
+}
+
+# kill_one MINSCORE: kill the process with the highest oom_score_adj (>= MIN),
+# the largest resident set among equals.
+kill_one() {
+	BESTP=
+	BESTS=$1
+	BESTR=0
+	for D in /proc/[0-9]*; do
+		P=${D#/proc/}
+		read -r S < "$D/oom_score_adj" 2>/dev/null || continue
+		[ "$S" -ge "$1" ] 2>/dev/null || continue
+		read -r SZ RSS REST < "$D/statm" 2>/dev/null || continue
+		if [ "$S" -gt "$BESTS" ] || { [ "$S" -eq "$BESTS" ] && [ "${RSS:-0}" -gt "$BESTR" ]; }; then
+			BESTP=$P
+			BESTS=$S
+			BESTR=${RSS:-0}
+		fi
+	done
+	if [ -n "$BESTP" ]; then
+		read -r LINE < "/proc/$BESTP/stat" 2>/dev/null
+		NAME=${LINE#*(}
+		NAME=${NAME%)*}
+		kill -9 "$BESTP" 2>/dev/null
+		L "LMK: killed $BESTP $NAME adj_score=$BESTS rss=$((BESTR * 4))kB avail=${AVAIL}kB swapfree=${SWAPFREE}kB"
+		return 0
+	fi
+	return 1
+}
+
+# find_fg: the foreground app is the biggest process at oom_score_adj 0.  The
+# FIFO only reports changes, so a short-lived foreground process (a widget
+# broadcast) would otherwise leave FGPID pointing at a dead pid.
+find_fg() {
+	FGPID=
+	BIG=0
+	for D in /proc/[0-9]*; do
+		read -r S < "$D/oom_score_adj" 2>/dev/null || continue
+		[ "$S" = 0 ] || continue
+		read -r SZ REST < "$D/statm" 2>/dev/null || continue
+		if [ "${SZ:-0}" -gt "$BIG" ]; then
+			BIG=$SZ
+			FGPID=${D#/proc/}
+		fi
+	done
+}
+
+FGPID=
+HEAVY=0
+LASTKILL=0
+LASTLOG=0
+LASTPROT=0
+N=0
+while true; do
+	if read -t 1 -r PID ADJ <&3; then
+		apply_adj "$PID" "$ADJ"
+		N=$((N + 1))
+		# a burst of updates (app start): still look at memory now and then
+		[ "$N" -lt 20 ] && continue
+	fi
+	N=0
+	read -r UP REST < /proc/uptime
+	NOW=${UP%.*}
+	if [ $((NOW - LASTPROT)) -ge 10 ]; then
+		protect
+		find_fg
+		LASTPROT=$NOW
+	fi
+	read_mem
+	A1=$T1; A2=$T2; A3=$T3
+	if [ -n "$FGPID" ]; then
+		read -r SZ REST < "/proc/$FGPID/statm" 2>/dev/null || SZ=0
+		if [ "${SZ:-0}" -gt "$HEAVY_PAGES" ]; then
+			A1=$((T1 + 14336)); A2=$((T2 + 10240)); A3=$((T3 + 6144))
+			HEAVY=1
+		else
+			HEAVY=0
+		fi
+	fi
+	if [ "$SWAPFREE" -lt 8192 ]; then
+		A1=$((A1 + 6144)); A2=$((A2 + 4096)); A3=$((A3 + 3072))
+	fi
+	if [ $((NOW - LASTKILL)) -ge "$COOLDOWN" ]; then
+		MIN=
+		if [ "$AVAIL" -lt "$A3" ]; then MIN=117
+		elif [ "$AVAIL" -lt "$A2" ]; then MIN=235
+		elif [ "$AVAIL" -lt "$A1" ]; then MIN=411
+		fi
+		[ -n "$MIN" ] && kill_one "$MIN" && LASTKILL=$NOW
+	fi
+	if [ $((NOW - LASTLOG)) -ge 120 ]; then
+		L "stat: avail=${AVAIL}kB swapfree=${SWAPFREE}kB adj-updates=$APPLIED fg=${FGPID:-0} fgpages=${SZ:-0} heavy=${HEAVY:-0} zram=$(cat /sys/block/zram0/mm_stat 2>/dev/null)"
+		LASTLOG=$NOW
+		# resident (shared with zygote included) and private size of the biggest
+		# processes, to see what really costs RAM
+		TOP=
+		for D in /proc/[0-9]*; do
+			read -r SZ RSS REST < "$D/statm" 2>/dev/null || continue
+			[ "${RSS:-0}" -gt 150 ] || continue
+			read -r LINE < "$D/stat" 2>/dev/null || continue
+			NAME=${LINE#*(}
+			NAME=${NAME%)*}
+			PRIV=$(awk '/^Private_/{s+=$2} END{print s+0}' "$D/smaps" 2>/dev/null)
+			TOP="$TOP$((RSS * 4)) $NAME private=${PRIV}kB
+"
+		done
+		L "top: $(printf '%s' "$TOP" | sort -rn | head -10 | tr '\n' ',')"
+	fi
+done
+MEMGUARD
+		chmod 0755 "$ROOT/bin/memguard"
+		# No modem: the radio interface layer daemon is declared but never
+		# started (init's "disabled" flag), the same way init.rc ships services
+		# that are only started on demand.
+		awk '{print} /^service ril-daemon/{print "    disabled"}' \
+			"$ROOT/init.rc" > "$ROOT/init.rc.new" && mv "$ROOT/init.rc.new" "$ROOT/init.rc"
+		# The rootfs lives in RAM for good.  Bench tools that only diagnostic
+		# boots ever ran cost ~5 MB of the 128 MB, so the Froyo image drops them.
+		for T in tscal pcmtest inputtest tsdump tsmark rt hbfb trace androidtest; do
+			rm -f "$ROOT/bin/$T"
+		done
+		cat >> "$ROOT/init.rc" <<'MEMGUARD_RC'
+
+# memguard: zram swap, oom priorities, low-memory killer (see mkinitramfs.sh)
+service memguard /bin/memguard
+    user root
+    group root
+MEMGUARD_RC
+		echo "    memguard: zram swap + oom_adj relay + low-memory killer (init.rc service)"
+	fi
 	install -m 644 "$AD/default.prop" "$ROOT/default.prop"
 	# ro.secure=0 (the SDK/emulator default) makes every background ANR pop an
 	# AppNotRespondingDialog.  That window carries FLAG_SYSTEM_ERROR, and Android's
@@ -2360,6 +2604,16 @@ SD
 		DALVIK_TAR=/mnt/sd/android/dalvik.tar
 		DALVIK_RESTORED=0
 		DALVIK_DIRTY=0
+		# The tar is only valid for the system.img it was made from: a rebuilt
+		# framework jar next to a stale framework dex makes every installd dexopt
+		# SIGSEGV ("Unable to get provider ...SettingsProvider", boot loop).  So
+		# remember the image's size+mtime beside the tar and drop the tar when
+		# the image changed (or the tar predates this check).
+		SYSSIG=$(stat -c '%s %Y' /mnt/sd/android/system.img 2>/dev/null)
+		if [ -f "$DALVIK_TAR" ] && [ "$(cat "$DALVIK_TAR.sig" 2>/dev/null)" != "$SYSSIG" ]; then
+			say "android/system.img changed since dalvik.tar was saved: dropping the stale tar"
+			rm -f "$DALVIK_TAR" "$DALVIK_TAR.sig"
+		fi
 		if [ ! -s /data/dalvik-cache/system@framework@core.jar@classes.dex ] && \
 		   [ -f "$DALVIK_TAR" ]; then
 			if tar xf "$DALVIK_TAR" -C /data 2>/dev/null; then
@@ -3043,6 +3297,7 @@ GBCXML
 			   [ -n "$(ls -A /data/dalvik-cache 2>/dev/null)" ]; then
 				tar cf "$DALVIK_TAR.tmp" -C /data dalvik-cache 2>/dev/null \
 					&& mv -f "$DALVIK_TAR.tmp" "$DALVIK_TAR" \
+					&& echo "$SYSSIG" > "$DALVIK_TAR.sig" \
 					&& say "  saved /data/dalvik-cache -> android/dalvik.tar"
 			fi
 		fi

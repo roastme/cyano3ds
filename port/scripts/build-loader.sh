@@ -67,6 +67,21 @@ cp "$SRC/firm_linux_loader/firm_linux_loader.firm" "$OUT/firm_linux_loader.firm"
 # fastboot3DS' file browser shows the file name; give it a recognisable one.
 cp "$OUT/firm_linux_loader.firm" "$OUT/Cyano3DS.firm"
 
+# Old-3DS-only variant for the CyanogenMod 6 (Froyo) build: always the CTR
+# device tree (128 MB), cores 2/3 stay off and the SoC stays at 268 MHz, even
+# on a New 3DS.  Built from a copy so the CM7 loader above is left alone.
+if [ "${BUILD_OLD3DS_FIRM:-1}" = 1 ]; then
+	echo "==> firm_linux_loader (old-3DS-only variant)"
+	rm -rf "$SRC/firm_linux_loader-old3ds"
+	cp -a "$SRC/firm_linux_loader" "$SRC/firm_linux_loader-old3ds"
+	python3 "$PORT/scripts/patch-firm-loader-old3ds.py" "$SRC/firm_linux_loader-old3ds"
+	make -C "$SRC/firm_linux_loader-old3ds" clean >/dev/null 2>&1 || true
+	make -C "$SRC/firm_linux_loader-old3ds"
+	[ -f "$SRC/firm_linux_loader-old3ds/firm_linux_loader.firm" ] \
+		|| die "old-3DS firm_linux_loader.firm was not produced"
+	cp "$SRC/firm_linux_loader-old3ds/firm_linux_loader.firm" "$OUT/Cyano3DS-CM6.firm"
+fi
+
 echo "==> arm9linuxfw"
 # The upstream firmware exposes the SD card read-only (VIRTIO_BLK_F_RO and no
 # VIRTIO_BLK_T_OUT handling).  Android needs a writable /data and this port

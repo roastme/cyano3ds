@@ -285,3 +285,7 @@ CONFIG_BUG_ON_DATA_CORRUPTION=y
 # CONFIG_FTRACE is not set
 CONFIG_STRICT_DEVMEM=y
 # CONFIG_RUNTIME_TESTING_MENU is not set
+
+# Compressed RAM swap: the old 3DS has 128 MB and /data is a tmpfs
+CONFIG_ZRAM=y
+CONFIG_ZRAM_DEF_COMP_LZ4=y
