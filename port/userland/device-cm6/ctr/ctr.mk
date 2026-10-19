@@ -1,7 +1,8 @@
 # ctr.mk - AOSP-style product for the old Nintendo 3DS (Froyo)
 #
 # 128 MB of RAM, a 320x240 touch panel and no phone hardware, so this is a
-# trimmed core.mk product: framework, Launcher2, Settings and a few small apps,
+# trimmed core.mk product: framework, Launcher2, Settings, the Music, Gallery,
+# Camera, Calendar and Email apps and a few small ones,
 # not generic.mk's full application set.
 
 $(call inherit-product, build/target/product/core.mk)
@@ -15,6 +16,12 @@ PRODUCT_PACKAGES += \
     Calculator \
     DeskClock \
     AlarmProvider \
+    Music \
+    Gallery \
+    Camera \
+    Calendar \
+    CalendarProvider \
+    Email \
     libEGL \
     libGLESv1_CM \
     libGLESv2 \

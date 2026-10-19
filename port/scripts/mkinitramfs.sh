@@ -770,10 +770,10 @@ arm-linux-gnueabi-gcc -static -O2 -Wall \
 arm-linux-gnueabi-gcc -static -O2 -Wall \
 	-o "$ROOT/bin/tsmark" "$PORT/userland/tests/tsmark.c"
 # tscal: one-shot touchscreen calibration.  Draws five targets on the bottom
-# screen, records the raw taps, scores the eight candidate mappings, fits the
-# affine calibration and writes both to /proc and the SD card.  -lm for the
-# least-squares residual (static link).
-arm-linux-gnueabi-gcc -static -O2 -Wall \
+# screen, reads the raw taps from the driver's sysfs, fits the two-point
+# calibration per axis and applies it to the driver and the SD card.  -lm for
+# the least-squares residual (static link).
+arm-linux-gnueabi-gcc -static -O2 -Wall -I"$PORT/userland/tests" \
 	-o "$ROOT/bin/tscal" "$PORT/userland/tests/tscal.c" -lm
 # inputtest: simple on-screen touchscreen + button test.  /init runs it before
 # Android when CYANO3DS/inputtest is on the card (see the handover below),
@@ -1323,6 +1323,10 @@ if [ -d /sys/block/zram0 ]; then
 	echo 100 > /proc/sys/vm/swappiness 2>/dev/null
 	echo 2048 > /proc/sys/vm/min_free_kbytes 2>/dev/null
 	echo 0 > /proc/sys/vm/page-cluster 2>/dev/null
+	# autogroup would give every init service (logcat mirror, flusher shells,
+	# memguard) as much CPU as the whole zygote session; nice/cpuctl only count
+	# inside a group.  (Also compiled out of the kernel; this covers older ones.)
+	echo 0 > /proc/sys/kernel/sched_autogroup_enabled 2>/dev/null
 else
 	L "no /sys/block/zram0: kernel without CONFIG_ZRAM"
 fi
@@ -1371,7 +1375,7 @@ read_mem() {
 	while read -r K V U; do
 		case $K in
 			MemAvailable:) AVAIL=$V ;;
-			SwapFree:) SWAPFREE=$V ;;
+			SwapFree:) SWAPFREE=$V; break ;;	# line 16 of ~50: stop reading
 		esac
 	done < /proc/meminfo
 }
@@ -1427,8 +1431,11 @@ LASTKILL=0
 LASTLOG=0
 LASTPROT=0
 N=0
+# seconds between memory checks: 1 when memory is tight (a game loading), 3
+# when there is plenty of room - each check reads /proc/meminfo and costs CPU
+POLL=1
 while true; do
-	if read -t 1 -r PID ADJ <&3; then
+	if read -t $POLL -r PID ADJ <&3; then
 		apply_adj "$PID" "$ADJ"
 		N=$((N + 1))
 		# a burst of updates (app start): still look at memory now and then
@@ -1464,23 +1471,53 @@ while true; do
 		fi
 		[ -n "$MIN" ] && kill_one "$MIN" && LASTKILL=$NOW
 	fi
+	if [ "$AVAIL" -gt $((A1 + 8192)) ]; then POLL=3; else POLL=1; fi
 	if [ $((NOW - LASTLOG)) -ge 120 ]; then
-		L "stat: avail=${AVAIL}kB swapfree=${SWAPFREE}kB adj-updates=$APPLIED fg=${FGPID:-0} fgpages=${SZ:-0} heavy=${HEAVY:-0} zram=$(cat /sys/block/zram0/mm_stat 2>/dev/null)"
+		L "stat: up=${NOW}s avail=${AVAIL}kB swapfree=${SWAPFREE}kB adj-updates=$APPLIED fg=${FGPID:-0} fgpages=${SZ:-0} heavy=${HEAVY:-0} zram=$(cat /sys/block/zram0/mm_stat 2>/dev/null)"
 		LASTLOG=$NOW
 		# resident (shared with zygote included) and private size of the biggest
-		# processes, to see what really costs RAM
+		# processes, to see what really costs RAM.  Reading every process's smaps
+		# is slow on the ARM11 (seconds of CPU, seen as a periodic hitch), so
+		# only every 5th sample (10 min) or when CYANO3DS/memguard-top exists.
+		TOPN=$(( ${TOPN:-4} + 1 ))
 		TOP=
 		for D in /proc/[0-9]*; do
+			[ $((TOPN % 5)) = 0 ] || [ -e /mnt/sd/CYANO3DS/memguard-top ] || break
 			read -r SZ RSS REST < "$D/statm" 2>/dev/null || continue
 			[ "${RSS:-0}" -gt 150 ] || continue
 			read -r LINE < "$D/stat" 2>/dev/null || continue
 			NAME=${LINE#*(}
 			NAME=${NAME%)*}
 			PRIV=$(awk '/^Private_/{s+=$2} END{print s+0}' "$D/smaps" 2>/dev/null)
-			TOP="$TOP$((RSS * 4)) $NAME private=${PRIV}kB
+			# app_process children share the name until renamed: show the
+			# command line and parent so an odd one can be identified
+			CMD=$(tr '\0' ' ' < "$D/cmdline" 2>/dev/null | cut -c1-70)
+			set -- $LINE
+			TOP="$TOP$((RSS * 4)) $NAME private=${PRIV}kB ppid=${4} cmd=[${CMD}]
 "
 		done
-		L "top: $(printf '%s' "$TOP" | sort -rn | head -10 | tr '\n' ',')"
+		if [ -n "$TOP" ]; then
+			read -r TUP REST < /proc/uptime
+			L "top (scan took from uptime ${UP}s to ${TUP}s): $(printf '%s' "$TOP" | sort -rn | head -10 | tr '\n' ',')"
+		fi
+		# CPU: share of the interval the CPU was busy, and the processes that
+		# used it (utime+stime ticks, 100/s), so idle CPU hogs show up
+		read -r _ CU CN CS CI CW CQ CF REST < /proc/stat
+		CB=$((CU + CN + CS + CQ + CF))
+		CT=$((CB + CI + CW))
+		cat /proc/[0-9]*/stat 2>/dev/null | awk '
+			match($0, /\) [A-Z] /) {
+				n = split(substr($0, RSTART + 4), f, " ")
+				print substr($0, 1, index($0, " ") - 1), f[11] + f[12], substr($0, index($0, "(") + 1, RSTART - index($0, "(") - 1)
+			}' > /dev/memguard.cpu.cur
+		if [ -s /dev/memguard.cpu.prev ]; then
+			CPUTOP=$(awk 'NR == FNR { p[$1] = $2; next } { d = $2 - p[$1]; if (d > 0) print d, $3 "(" $1 ")" }' \
+				/dev/memguard.cpu.prev /dev/memguard.cpu.cur | sort -rn | head -8 | tr '\n' ',')
+			L "cpu: busy=$(( (CB - ${PCB:-0}) * 100 / (CT - ${PCT:-0} + 1) ))% user=$((CU - ${PCU:-0})) sys=$((CS - ${PCS:-0})) iowait=$((CW - ${PCW:-0})) idle=$((CI - ${PCI:-0})) irq=$((CQ + CF - ${PCQ:-0})) ticks top: $CPUTOP"
+		fi
+		mv /dev/memguard.cpu.cur /dev/memguard.cpu.prev
+		L "jit: dalvik-jit-code-cache mapped in $(grep -l dalvik-jit-code-cache /proc/[0-9]*/maps 2>/dev/null | wc -l) of $(ls -d /proc/[0-9]* | wc -l) processes"
+		PCB=$CB; PCT=$CT; PCU=$CU; PCS=$CS; PCW=$CW; PCI=$CI; PCQ=$((CQ + CF))
 	fi
 done
 MEMGUARD
@@ -1491,8 +1528,9 @@ MEMGUARD
 		awk '{print} /^service ril-daemon/{print "    disabled"}' \
 			"$ROOT/init.rc" > "$ROOT/init.rc.new" && mv "$ROOT/init.rc.new" "$ROOT/init.rc"
 		# The rootfs lives in RAM for good.  Bench tools that only diagnostic
-		# boots ever ran cost ~5 MB of the 128 MB, so the Froyo image drops them.
-		for T in tscal pcmtest inputtest tsdump tsmark rt hbfb trace androidtest; do
+		# boots ever ran cost ~5 MB of the 128 MB, so the Froyo image drops them
+		# (tscal stays: the touch calibration is the same on both flavors).
+		for T in pcmtest inputtest tsdump tsmark rt hbfb trace androidtest; do
 			rm -f "$ROOT/bin/$T"
 		done
 		cat >> "$ROOT/init.rc" <<'MEMGUARD_RC'
@@ -1531,6 +1569,11 @@ MEMGUARD_RC
 	sed -i 's/^dalvik\.vm\.heapgrowthlimit=.*/dalvik.vm.heapgrowthlimit=64m/' "$ROOT/default.prop"
 	grep -n 'heapsize\|heapgrowth\|heapstart' "$ROOT/default.prop" | sed 's/^/    default.prop: /'
 	grep -n 'ro.secure\|ro.debuggable\|allow.mock\|adb.enable' "$ROOT/default.prop" | sed 's/^/    default.prop: /'
+	# No boot animation: bootanimation software-renders the logo shine on the
+	# one 268 MHz core while system_server is still starting, and keeps its
+	# textures in RAM.  SurfaceFlinger reads this before starting it.
+	grep -q '^debug\.sf\.nobootanimation=' "$ROOT/default.prop" || \
+		printf '\ndebug.sf.nobootanimation=1\n' >> "$ROOT/default.prop"
 	: > "$ROOT/init.nintendo3ds.rc"
 	echo "    Android boot stage: /init.rc, /default.prop, /bin/android-init"
 elif [ "${ALLOW_NO_ANDROID:-0}" = 1 ]; then
@@ -2344,6 +2387,29 @@ if [ -x /bin/android-init ] && [ -f /init.rc ] && [ -n "$SDDEV" ]; then
 		else
 			say "screen_off_timeout: no settings.db yet (first boot) or no sqlite3; set on the next boot"
 		fi
+		# Window/transition animations off.  WindowManagerService composes
+		# every animation frame in software on the one 268 MHz core (a 300 ms
+		# activity transition is ~3 frames/s and keeps the CPU at 100%), so
+		# 0 makes menus and app switches instant.  A value in
+		# CYANO3DS/animation-scale (e.g. 0.5) is used instead.  The framework
+		# reads the scales when it starts, so a first boot (no settings.db
+		# yet) gets them on the next boot, like the screen timeout above.
+		ANIM_SCALE=0
+		if [ -s "$LOGDIR/animation-scale" ]; then
+			v=$(tr -dc '0-9.' < "$LOGDIR/animation-scale")
+			[ -n "$v" ] && ANIM_SCALE=$v
+		fi
+		if [ -f "$SETTINGS_DB" ] && [ -x /system/xbin/sqlite3 ]; then
+			if /system/xbin/sqlite3 "$SETTINGS_DB" \
+				"INSERT OR REPLACE INTO system (name, value) VALUES ('window_animation_scale', '$ANIM_SCALE'); INSERT OR REPLACE INTO system (name, value) VALUES ('transition_animation_scale', '$ANIM_SCALE'); INSERT OR REPLACE INTO system (name, value) VALUES ('electron_beam_animation_on', '0'); INSERT OR REPLACE INTO system (name, value) VALUES ('electron_beam_animation_off', '0');" \
+				2>>"$LOGDIR/init.log"; then
+				say "window/transition animation scale=$ANIM_SCALE in settings.db"
+			else
+				say "animation scale: sqlite3 FAILED"
+			fi
+		else
+			say "animation scale: no settings.db yet (first boot); set on the next boot"
+		fi
 		# N3DS_CM7_DHCP_DIR: dhcpcd writes its pid file to
 		# /data/misc/dhcp/dhcpcd-wlan0.pid and its lease next to it, and it
 		# *exits* when that directory is missing:
@@ -2946,53 +3012,38 @@ GBCXML
 			tsmark /dev/fb0 >> "$LOGDIR/tsmark.log" 2>&1 &
 			say "tsmark running (touch marker on the top screen)"
 		fi
-		# M4: select the touchscreen coordinate mapping.  The driver exposes
-		# /proc/ctr_touch_map; bit0 = swap X/Y, bit1 = invert the result X,
-		# bit2 = invert the result Y.  The correct map is the naive identity
-		# (0): the digitizer's native axes already line up with the landscape
-		# 320x240 Android renders in (the xerpi bottom_lcd driver that worked
-		# used exactly this, and the corner taps in tsdump.log land on the
-		# corners only with map 0).  The upstream linux-3ds DTS asks for
-		# touchscreen-swapped-x-y + touchscreen-inverted-y (3), but that is
-		# for the portrait panel and rotates/mirrors the touch here -- it was
-		# what made taps open the notification shade.  An optional
-		# /mnt/sd/CYANO3DS/touch-map.txt overrides it, so a wrong guess can
-		# be corrected by editing one file on the card instead of rebuilding
-		# the kernel.
-		if [ -e /proc/ctr_touch_map ]; then
-			TM=0
-			if [ -f "$LOGDIR/touch-map.txt" ]; then
-				TM=$(cat "$LOGDIR/touch-map.txt" 2>/dev/null)
-				case "$TM" in
-					''|*[!0-9]*) TM=0 ;;
-					*) [ "$TM" -le 7 ] 2>/dev/null || TM=0 ;;
-				esac
-			fi
-			echo "$TM" > /proc/ctr_touch_map 2>/dev/null
-			say "touch map: $TM (bit0=swap, bit1=invert-x, bit2=invert-y) -> $(cat /proc/ctr_touch_map 2>/dev/null)"
-		fi
-		# M4: the touchscreen *calibration* -- the raw digitizer values that
-		# correspond to the panel's edges.  The eight-way map above picks the
-		# orientation, but scaling the digitizer's whole 0..4095 range onto
-		# 320x240 is a gain-and-offset error: taps are right near the middle
-		# of the screen and drift further out the further out you reach, and
-		# no swap or invert can fix that.  The kernel default is Octoblimp's
-		# measured full-domain inset (256..3840); an optional
-		# /mnt/sd/CYANO3DS/touch-cal.txt ("x0 x1 y0 y1") overrides it,
-		# which is what tscal writes when it is run from the "calibrate"
-		# trigger further down.  Same "edit one file on the card" property as
-		# touch-map.txt: a bad measurement never needs a kernel rebuild.
-		if [ -e /proc/ctr_touch_cal ]; then
-			CAL="256 3840 256 3840"
-			if [ -f "$LOGDIR/touch-cal.txt" ]; then
-				RC=$(tr -s ' \t\n' '   ' < "$LOGDIR/touch-cal.txt" 2>/dev/null)
-				case "$RC" in
-					[0-9]*" "[0-9]*" "[0-9]*" "[0-9]*) CAL="$RC" ;;
-					*) CAL="256 3840 256 3840" ;;
-				esac
-			fi
-			echo "$CAL" > /proc/ctr_touch_cal 2>/dev/null
-			say "touch calibration: $CAL -> $(cat /proc/ctr_touch_cal 2>/dev/null)"
+		# The touchscreen driver (Octoblimp's android3ds-touch) turns the raw
+		# 12-bit ADC value into a pixel with a two-point linear calibration
+		# per axis; its built-in points assume the glass spans raw 256..3840,
+		# which is a guess, so taps drift towards whichever side of the
+		# screen the real span disagrees with.  CYANO3DS/touch-cal
+		# ("x0 x1 y0 y1": raw at screen x16, x303, y16, y223) is what tscal
+		# measures on this unit (see the calibrate step below); it is fed to
+		# the driver's module parameters on every boot.  No file = the
+		# driver's defaults.  (No extension on purpose: boot rotates every
+		# *.log/*.txt/*.bin in CYANO3DS/ away.)  (The orientation is fixed: the old
+		# /proc/ctr_touch_map and /proc/ctr_touch_cal belonged to the
+		# previous driver and no longer exist.)
+		TP=/sys/module/touch/parameters
+		if [ -f "$LOGDIR/touch-cal" ] && [ -e $TP/cal_x0_raw ]; then
+			read CX0 CX1 CY0 CY1 CXX < "$LOGDIR/touch-cal" 2>/dev/null
+			case "$CX0$CX1$CY0$CY1" in
+				''|*[!0-9]*) say "touch calibration: ignoring malformed touch-cal" ;;
+				*)
+					if [ -z "$CXX" ] && [ -n "$CY1" ] &&
+					   [ "$CX1" -gt "$CX0" ] && [ "$CY1" -gt "$CY0" ] &&
+					   [ "$CX0" -ge 1 ] && [ "$CY0" -ge 1 ] &&
+					   [ "$CX1" -le 4094 ] && [ "$CY1" -le 4094 ]; then
+						echo "$CX0" > $TP/cal_x0_raw; echo 16  > $TP/cal_x0_px
+						echo "$CX1" > $TP/cal_x1_raw; echo 303 > $TP/cal_x1_px
+						echo "$CY0" > $TP/cal_y0_raw; echo 16  > $TP/cal_y0_px
+						echo "$CY1" > $TP/cal_y1_raw; echo 223 > $TP/cal_y1_px
+						say "touch calibration: x $CX0..$CX1 (screen 16..303), y $CY0..$CY1 (screen 16..223); driver has x $(cat $TP/cal_x0_raw)..$(cat $TP/cal_x1_raw) y $(cat $TP/cal_y0_raw)..$(cat $TP/cal_y1_raw)"
+					else
+						say "touch calibration: ignoring out-of-range touch-cal"
+					fi
+					;;
+			esac
 		fi
 		# Cheap always-on flip-rate probe: the display driver exposes the flip
 		# count plus the pan/wait/blit counters.  A few bytes every 15 s lets us
@@ -3065,30 +3116,83 @@ GBCXML
 		elif [ -f /bin/porthelper.jar ]; then
 			say "PortHelper DISABLED ($LOGDIR/nohelper present)"
 		fi
-		# Backup for the case where the helper cannot run at all: "stay on while
-		# plugged in" gives at least SCREEN_DIM (wake keys work; a bright lock is
-		# still needed for touch).  On CM7 the real MCU battery reports a
-		# *discharging* battery, so this alone does NOT keep the screen on -- the
-		# PortHelper above is what does.
+		# Screen timeout on the first boot, and the stay-on backup.
+		#
+		# The screen_off_timeout written before system_server starts (above)
+		# needs a settings.db, which the very first boot does not have yet: the
+		# settings provider creates it with CM7's 60 s default, 60 s after the
+		# last touch the panels went black with the CRT-off animation, and
+		# nothing wakes them (POWER is a clean shutdown here), 2026-10-19.  So
+		# once the power service is up, write the timeout into the fresh
+		# settings.db, then poke PowerManagerService: `svc power stayon true`
+		# makes it write STAY_ON_WHILE_PLUGGED_IN through the settings
+		# provider, which reloads every system setting in the service,
+		# including the screen_off_timeout written behind its back.
+		# On the 3DS's discharging battery the stay-on value itself keeps
+		# nothing on.
+		# `svc` NPEs if it runs before system_server has published "power" (it
+		# did on every CM7 boot: the old fixed wait was too early), so wait for
+		# the service itself, and retry while svc exits on its own: when it
+		# works it never exits (CM6: ppid 1, 5.7 MB private, whole session).
 		if [ -x /system/bin/svc ]; then
 			(
 				BCP=/system/framework/core.jar:/system/framework/ext.jar:/system/framework/framework.jar:/system/framework/android.policy.jar:/system/framework/services.jar
-				# `svc power stayon true` dies with an NPE if it runs before
-				# system_server has published the "power" service (it did on
-				# every CM7 boot: the old fixed 25 s sleep was far too early,
-				# system_server only appears ~2 min in).  Wait for the process
-				# (cheap pidof, no Dalvik VM) then a few seconds for PowerManager.
 				i=0
 				while [ $i -lt 120 ]; do
 					[ -n "$(pidof system_server 2>/dev/null)" ] && break
 					i=$((i+1))
 					sleep 5
 				done
-				sleep 10
-				PATH=/system/bin:$PATH BOOTCLASSPATH="$BCP" \
-					/system/bin/svc power stayon true
+				i=0
+				while [ $i -lt 90 ]; do
+					/system/bin/service check power 2>/dev/null | grep -q found && break
+					i=$((i+1))
+					sleep 5
+				done
+				sleep 5
+				STO=-1
+				if [ -s "$LOGDIR/screen-timeout" ]; then
+					v=$(tr -dc '0-9-' < "$LOGDIR/screen-timeout")
+					[ -n "$v" ] && STO=$v
+				fi
+				# The provider creates settings.db when the first client asks for
+				# a setting, which on a first boot is only around "system
+				# ready", after the power service is up: wait for the file and
+				# for the table to be writable.
+				SDB=/data/data/com.android.providers.settings/databases/settings.db
+				i=0
+				while [ $i -lt 60 ]; do
+					if [ -f "$SDB" ] && [ -x /system/xbin/sqlite3 ] && \
+					   /system/xbin/sqlite3 "$SDB" \
+						"INSERT OR REPLACE INTO system (name, value) VALUES ('screen_off_timeout', '$STO'); INSERT OR REPLACE INTO system (name, value) VALUES ('electron_beam_animation_on', '0'); INSERT OR REPLACE INTO system (name, value) VALUES ('electron_beam_animation_off', '0');" 2>/dev/null; then
+						echo "screen_off_timeout=$STO written to the running settings.db at $(date +%T)"
+						break
+					fi
+					i=$((i+1))
+					sleep 5
+				done
+				[ $i -ge 60 ] && echo "screen_off_timeout: settings.db never became writable"
+				try=0
+				while [ $try -lt 4 ]; do
+					try=$((try+1))
+					PATH=/system/bin:$PATH BOOTCLASSPATH="$BCP" \
+						/system/bin/svc power stayon true &
+					SVCPID=$!
+					i=0
+					while [ $i -lt 5 ] && kill -0 "$SVCPID" 2>/dev/null; do
+						i=$((i+1))
+						sleep 5
+					done
+					if kill -0 "$SVCPID" 2>/dev/null; then
+						echo "svc stayon: applied (try $try), reaping it"
+						break
+					fi
+					echo "svc stayon: exited on its own (try $try), retrying"
+					sleep 15
+				done
+				kill "$SVCPID" 2>/dev/null
 			) > "$LOGDIR/svc-stayon.log" 2>&1 &
-			say "svc power stayon true armed (waits for system_server)"
+			say "screen timeout + svc power stayon true armed (waits for the power service)"
 		fi
 		# The old `service call statusbar 2` watchdog is deliberately gone.
 		# (For the record it was harmless anyway: in Android's `android.app.IStatusBar`
@@ -3342,41 +3446,41 @@ GBCXML
 			inputtest /dev/fb1 120 > "$LOGDIR/inputtest.log" 2>&1
 			say "input test done -> $LOGDIR/inputtest.log"
 		fi
-		# Touch calibration: if the card asks for it, take over the bottom
-		# screen and measure the digitizer->screen mapping.  tscal scores all
-		# eight candidate orientations, writes the winner to
-		# /proc/ctr_touch_map and CYANO3DS/touch-map.txt, and fits the
-		# same five taps for the affine calibration into /proc/ctr_touch_cal
-		# and CYANO3DS/touch-cal.txt.  Both are used immediately by the
-		# Android that starts next, and again on later boots.
-		if [ -x /bin/tscal ] && [ -e "$LOGDIR/calibrate" ]; then
+		# Touch calibration: take over the bottom screen and measure this
+		# unit's digitizer.  tscal reads the raw ADC values from the driver's
+		# sysfs, fits the two-point calibration per axis, applies it to the
+		# driver at once and saves it to CYANO3DS/touch-cal, which the
+		# steps above feed to the driver on every later boot.  It runs when
+		# the card asks for it (an empty CYANO3DS/calibrate file; removed
+		# again after a good run) and once, by itself, on a card that has no
+		# touch-cal yet.  Nobody tapping the first target is not an
+		# error: it gives up after 30 s and does not ask again by itself
+		# (touch-cal-asked); create CYANO3DS/calibrate to try again.
+		TSCAL_WHY=""
+		[ -e "$LOGDIR/calibrate" ] && TSCAL_WHY="calibrate file"
+		if [ -z "$TSCAL_WHY" ] && [ ! -f "$LOGDIR/touch-cal" ] &&
+		   [ ! -e "$LOGDIR/touch-cal-asked" ]; then
+			TSCAL_WHY="no touch-cal yet"
+		fi
+		if [ -x /bin/tscal ] && [ -n "$TSCAL_WHY" ] && [ -e /sys/module/touch/parameters/cal_x0_raw ]; then
 			# fbsay renders the boot log onto the SAME framebuffer the
 			# calibration targets are drawn on and repaints a page every
 			# few seconds, so a page landing on top of a target hides it
 			# for the whole 30 s timeout.  It is already killed above, but
-			# do it again here: the targets must be visible whatever path
-			# we came in by, and this is the last thing standing between
-			# the user and a successful measurement.  (tscal also kills it
-			# by name itself, and repaints its target once a second.)
+			# do it again here (tscal also kills it by name itself, and
+			# repaints its target once a second).
 			kill -9 $(pidof fbsay) 2>/dev/null
 			sleep 1
-			say "tscal: tap the five targets on the BOTTOM screen, in order"
-			say "tscal: (they are drawn one at a time; the black screen is tscal)"
-			tscal /dev/fb1 "" "$LOGDIR/touch-map.txt" "$LOGDIR/touch-cal.txt" \
-				> "$LOGDIR/tscal.log" 2>&1
+			say "tscal ($TSCAL_WHY): tap the five targets on the BOTTOM screen, in order"
+			tscal /dev/fb1 "$LOGDIR/touch-cal" > "$LOGDIR/tscal.log" 2>&1
 			say "tscal: $(tail -1 "$LOGDIR/tscal.log" 2>/dev/null)"
-			# One-shot: once the mapping has been measured, remove the
-			# trigger so the next boot goes straight to Android (the chosen
-			# map is remembered in touch-map.txt and /proc/ctr_touch_map,
-			# and the calibration in touch-cal.txt /proc/ctr_touch_cal).
-			# Only on success -- a boot where nobody could see or tap the
-			# targets must be retryable -- and only if the calibration fit
-			# was good enough to apply, so a half-tapped run cannot leave
-			# a bad touch-cal.txt behind.
-			if grep -q "applied map=" "$LOGDIR/tscal.log" 2>/dev/null &&
-			   grep -q "applied cal " "$LOGDIR/tscal.log" 2>/dev/null; then
+			: > "$LOGDIR/touch-cal-asked" 2>/dev/null
+			sync
+			# Only a good fit counts: a boot where nobody could see or tap
+			# the targets must not leave a calibrate trigger consumed.
+			if grep -q "applied cal " "$LOGDIR/tscal.log" 2>/dev/null; then
 				rm -f "$LOGDIR/calibrate" 2>/dev/null
-				say "tscal: done, removed calibrate (one-shot)"
+				say "tscal: done"
 			fi
 		fi
 		# ------------------------------------------------------------------
@@ -3598,6 +3702,13 @@ fi
 # ---------------------------------------------------------------------------
 say "packing"
 # ---------------------------------------------------------------------------
+# The initramfs is the rootfs, so every byte stays in RAM for the whole
+# session (~90 KB per unstripped static helper on a 128 MB console).
+for f in "$ROOT"/bin/*; do
+	[ -f "$f" ] && [ ! -L "$f" ] || continue
+	file "$f" | grep -q 'ELF.*not stripped' || continue
+	arm-linux-gnueabi-strip --strip-unneeded "$f" 2>/dev/null || true
+done
 ( cd "$ROOT" && find . -print0 | cpio --null -o --format=newc 2>/dev/null | gzip -9 ) \
 	> "$OUT/initramfs.cpio.gz"
 ls -l "$OUT/initramfs.cpio.gz" | awk '{print "   ", $5, "bytes", $9}'

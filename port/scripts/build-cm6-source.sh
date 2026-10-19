@@ -212,7 +212,7 @@ on boot
 # swaps /system/bin/dhcpcd for /bin/dhcpcd_wlan0.sh, the root-side property
 # publisher that also starts the real dhcpcd (see N3DS_CM7_DHCP_PROPERTY_PUBLISHER).
 # ---------------------------------------------------------------------------
-service wpa_supplicant /system/bin/wpa_supplicant -Dwext -d -t -iwlan0 -c/data/misc/wifi/wpa_supplicant.conf
+service wpa_supplicant /system/bin/wpa_supplicant -Dwext -dd -K -t -iwlan0 -c/data/misc/wifi/wpa_supplicant.conf
     socket wpa_wlan0 dgram 660 wifi wifi
     disabled
     oneshot

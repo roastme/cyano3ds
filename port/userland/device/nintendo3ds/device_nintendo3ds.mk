@@ -36,9 +36,16 @@ PRODUCT_PACKAGES += \
     acoustics.default
 
 # Permission files: the 3DS has a touchscreen and normal buttons.
+#
+# It is a Wi-Fi-only device, declared the way Gingerbread Wi-Fi-only tablets
+# (Galaxy Tab Wi-Fi, Xoom Wi-Fi) declare themselves: android.hardware.wifi is
+# present, android.hardware.telephony(.gsm/.cdma) is not (the product does not
+# inherit gsm.mk, so nothing ships those files), and ro.carrier is wifi-only
+# (below), which is what Market and the Google apps look at.
 PRODUCT_COPY_FILES += \
     frameworks/base/data/etc/handheld_core_hardware.xml:system/etc/permissions/handheld_core_hardware.xml \
-    frameworks/base/data/etc/android.hardware.touchscreen.xml:system/etc/permissions/android.hardware.touchscreen.xml
+    frameworks/base/data/etc/android.hardware.touchscreen.xml:system/etc/permissions/android.hardware.touchscreen.xml \
+    frameworks/base/data/etc/android.hardware.wifi.xml:system/etc/permissions/android.hardware.wifi.xml
 
 # Wi-Fi: Atheros AR6014G via the in-kernel ath6kl (cfg80211 + CFG80211_WEXT).
 # wpa_supplicant (0.6.x, WEXT) is only built when WPA_SUPPLICANT_VERSION and
@@ -65,6 +72,7 @@ PRODUCT_PROPERTY_OVERRIDES += \
     ro.product.device=nintendo3ds \
     ro.product.board=nintendo3ds \
     ro.telephony.default_network=0 \
+    ro.carrier=wifi-only \
     ro.com.google.locationfeatures=0 \
     ro.com.google.networklocation=0 \
     ro.kernel.android.checkjni=0 \

@@ -15,6 +15,7 @@ ro.board.platform=nintendo3ds
 ro.product.device=nintendo3ds
 ro.product.board=nintendo3ds
 ro.telephony.default_network=0
+ro.carrier=wifi-only
 ro.com.google.locationfeatures=0
 ro.com.google.networklocation=0
 ro.kernel.android.checkjni=0

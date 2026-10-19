@@ -205,6 +205,13 @@ fi
 # *next* such site can be found without hiding the freeze behind lockdep's
 # slowdown.
 scripts/config --enable DEBUG_KERNEL --enable DEBUG_ATOMIC_SLEEP
+# Enabling DEBUG_KERNEL makes olddefconfig switch on the debug options that
+# default to y under it; none of them is needed on the 268 MHz core, and
+# DEBUG_PREEMPT/DEBUG_LIST cost CPU on every lock and list operation.  Only the
+# LOCKDEBUG diagnostic build above wants them.
+if [ -z "${LOCKDEBUG:-}${LOCKDEP:-}" ]; then
+	scripts/config --disable DEBUG_PREEMPT --disable DEBUG_LIST
+fi
 # Android's init cannot even start without sockets: it opens the property
 # service as a PF_UNIX socket ("Failed to open socket 'property_service':
 # Function not implemented" = ENOSYS when CONFIG_UNIX is off) and listens for

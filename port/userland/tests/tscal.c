@@ -4,41 +4,40 @@
  *
  * WHY
  * ---
- * The 3DS bottom panel is scanned portrait and the driver transposes a
- * landscape 320x240 frame into it; the touch digitizer has its own native
- * axes.  Which transposition/inversion is right depends on how the digitizer
- * is bonded and cannot be read out of a register, so it has to be measured.
- * Guessing it wrong makes taps land up to 90 degrees away from where the UI
- * thinks they are -- a tap meant for an icon lands on the status bar, opens
- * the touch-modal notification shade, and from then on every touch is
- * swallowed.
+ * The touchscreen driver (Octoblimp's android3ds-touch, vendored verbatim)
+ * turns the digitizer's raw 12-bit ADC reading into a 320x240 pixel with a
+ * two-point linear calibration per axis.  Its built-in points assume the
+ * glass spans raw 256..3840 edge to edge.  That is a guess, not a
+ * measurement -- this port has no way to read the console's factory HWCAL --
+ * and every panel is a little different.  When the guess is off the error is
+ * a gain plus an offset, so taps are right in one place and drift the
+ * further you go from it; if the unit's span is not centred, one side of the
+ * screen is simply worse than the other.
  *
- * This tool runs *before* Android and measures the mapping directly:
+ * This tool measures the unit instead.  It runs before Android:
  *
- *   1. it draws five targets (four corners + centre) on the bottom screen;
- *   2. the user taps each target once, in order;
- *   3. it scores all eight candidate mappings against the taps, picks the
- *      best one, and writes it to /proc/ctr_touch_map and
- *      /mnt/sd/CYANO3DS/touch-map.txt.
+ *   1. it draws five targets on the bottom screen, one at a time (the four
+ *      corners, inset 16 px, and the centre);
+ *   2. the user taps each one; the raw ADC value is read from the driver's
+ *      sysfs attributes (/sys/class/input/inputN/raw_{x,y,down}), which are
+ *      the values *before* any calibration, so the result does not depend on
+ *      what the driver is currently applying;
+ *   3. a least-squares line per axis gives the raw value at screen x 16 / 303
+ *      and y 16 / 223, which the driver takes as its calibration points
+ *      (/sys/module/touch/parameters/cal_{x,y}{0,1}_{raw,px}).
  *
- * The mapping bit mask is the same the kernel uses:
+ * The result is applied at once and written to CYANO3DS/touch-cal as
+ * "x0 x1 y0 y1" (raw at screen x16, x303, y16, y223); /init feeds that file to
+ * the driver on every boot.  The per-target error after the fit is printed so
+ * a panel that is not linear (a left edge that bends, say) shows up in the
+ * log instead of being averaged away.
  *
- *   bit0 = swap X/Y, bit1 = invert X, bit2 = invert Y.
+ * A mis-tap can be taken back: B undoes the previous tap and shows that
+ * target again (after the last tap there are a few seconds to do the same).
  *
- * Orientation is only half of the problem.  The driver also has to know which
- * raw 12-bit ADC values correspond to the panel's edges, because the
- * digitizer's full-scale range is *not* the glass: scaling 0..4095 onto
- * 320x240 under-reads the span, so a tap near the middle of the screen is
- * about right and a tap near an edge lands further out the further out you
- * reach -- a gain-and-offset error that no swap or invert can fix.  So the
- * same five taps are fitted for both axes and the raw values that map to
- * screen 0 and screen 319 are written to /proc/ctr_touch_cal and
- * /mnt/sd/CYANO3DS/touch-cal.txt.
- *
- * Usage: tscal [fbfile] [inputfile] [mapfile] [calfile]
- *   defaults: /dev/fb1  (scan /dev/input)  /mnt/sd/CYANO3DS/touch-map.txt
- *             /mnt/sd/CYANO3DS/touch-cal.txt
- * Input is not tapped within TSCAL_TIMEOUT seconds => leave the mapping be.
+ * Usage: tscal [fbfile] [calfile]
+ *   defaults: /dev/fb1  (do not save)
+ * No tap within TSCAL_TIMEOUT seconds => leave the calibration alone.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,27 +48,31 @@
 #include <errno.h>
 #include <time.h>
 #include <sys/ioctl.h>
-#include <sys/select.h>
 #include <sys/mman.h>
 #include <dirent.h>
 #include <signal.h>
 #include <linux/fb.h>
 #include <linux/input.h>
 
-#define MAX_12BIT 4095
+#include "font8x8.h"
+
 #define NUM_TARGETS 5
 #define TSCAL_TIMEOUT 30	/* seconds per target */
-/*
- * A tap is only accepted if it lands within this many pixels of the target
- * that was drawn.  Without it, one mistap -- and a mistap is the *normal*
- * outcome when the targets are not clearly visible, which is exactly when
- * calibration is needed -- goes into the fit as a point at the wrong place
- * and drags every other point with it.  It did: a run where the bottom-
- * right target was tapped at the screen centre (raw 2003,2048, i.e. the
- * middle of the ADC domain) produced a least-squares fit with an RMS of
- * 55 px, which is worse than having no calibration at all.
- */
-#define TSCAL_MAXERR 40
+#define POLL_US 4000		/* the driver samples every 4 ms */
+#define SETTLE_MS 60		/* a resistive panel ramps up after contact */
+#define MIN_SAMPLES 6
+#define MAX_SAMPLES 4096
+#define CONFIRM_SECS 3		/* undo window after the last tap */
+/* The kernel DTS maps B to KEY_BACK (158); BTN_B is the unpatched code. */
+#define KEY_B_MAPPED 158
+/* Screen positions the driver is told the two raw values belong to. */
+#define CAL_X0 16
+#define CAL_X1 303
+#define CAL_Y0 16
+#define CAL_Y1 223
+/* A fit worse than this on either axis is a mis-tap, not a calibration. */
+#define MAX_RMS 9.0
+#define PARAM_DIR "/sys/module/touch/parameters"
 
 struct fb {
 	int fd;
@@ -105,8 +108,7 @@ static int fb_open(struct fb *f, const char *path)
 	 * The panel is double buffered and ctr_lcd_fb only updates it on a flip,
 	 * so a raw write to the mmap'd framebuffer is never shown.  Paint into
 	 * the buffer that is *not* being scanned and flip to it (the same
-	 * sequence fbsay and fbtest use).  Without this the targets are simply
-	 * invisible, which is exactly how a calibration run is lost.
+	 * sequence fbsay and fbtest use).
 	 */
 	f->cur = f->var.yoffset / f->var.yres;
 	if (f->cur > 1)
@@ -187,15 +189,24 @@ static void target(struct fb *f, int cx, int cy, unsigned int color)
 		putpx(f, cx + i, cy, color), putpx(f, cx, cy + i, color);
 }
 
+static void text(struct fb *f, int x, int y, const char *s, unsigned int color)
+{
+	for (; *s; s++, x += FONT_W) {
+		const unsigned char *g = font8x8 + (unsigned)(unsigned char)*s * FONT_H;
+		int row, col;
+
+		for (row = 0; row < FONT_H; row++)
+			for (col = 0; col < FONT_W; col++)
+				if (g[row] & (0x80 >> col))
+					putpx(f, x + col, y + row, color);
+	}
+}
+
 /*
  * The boot log is rendered onto the *same* framebuffer this tool draws its
- * targets on (fbsay, /dev/fb1), and it repaints a page every few seconds --
- * which is exactly why a calibration run used to show the targets being
- * covered by scrolling log text: /init kills fbsay before Android starts, but
- * not on every path that reaches this tool, and a repaint that lands between
- * our clear() and the tap is enough to hide the target.  Kill it here as well,
- * by name, rather than trusting the caller to have done it, and say how many
- * processes were stopped so the log records it.
+ * targets on (fbsay), and it repaints a page every few seconds -- a repaint
+ * that lands between our clear() and the tap hides the target.  Kill it here
+ * by name rather than trusting the caller to have done it.
  */
 static int kill_log_renderers(void)
 {
@@ -236,526 +247,487 @@ static int kill_log_renderers(void)
 }
 
 /*
- * The whole calibration screen: black, one big target, and a progress bar of
- * filled squares top-left.  Painted once per target *and* once a second while
- * waiting for the tap, so that even if something else draws on this
- * framebuffer the target is visible again within a second instead of staying
- * hidden for the whole 30 s timeout.
+ * The whole calibration screen: black, one big target, the instruction and a
+ * counter.  Painted once per target *and* once a second while waiting for the
+ * tap, so that even if something else draws on this framebuffer the target is
+ * visible again within a second instead of staying hidden for the timeout.
  */
 static void paint_target(struct fb *f, const int (*tgt)[2], int i,
 			 unsigned int fg, unsigned int bg)
 {
-	int k, j;
+	char msg[48];
 
 	clear(f, bg);
 	target(f, tgt[i][0], tgt[i][1], pack_rgb(f, 0xff, 0xff, 0xff));
-	for (k = 0; k <= i; k++)
-		for (j = 0; j < 10; j++)
-			putpx(f, 4 + k * 14, 4 + j, fg);
+	snprintf(msg, sizeof(msg), "TOUCH SCREEN SETUP %d/%d", i + 1, NUM_TARGETS);
+	text(f, 56, 100 + (tgt[i][1] < 120 ? 40 : -40), msg, fg);
+	text(f, 56, 112 + (tgt[i][1] < 120 ? 40 : -40),
+	     "Tap the centre of the cross", fg);
+	text(f, 56, 124 + (tgt[i][1] < 120 ? 40 : -40),
+	     i > 0 ? "B = undo the last tap" : "", fg);
 	fb_flip(f);
 }
 
-static int is_touchscreen(int fd)
+/* ---- the B button (undo) ---------------------------------------------- */
+
+#define MAXKEYS 8
+static int keyfd[MAXKEYS], nkeys;
+
+static int has_bit(const unsigned long *bits, int bit)
 {
-	unsigned long absbits[(ABS_MAX + 8 * sizeof(unsigned long)) /
-			      (8 * sizeof(unsigned long))];
+	return !!(bits[bit / (8 * sizeof(unsigned long))] &
+		  (1UL << (bit % (8 * sizeof(unsigned long)))));
+}
+
+/* Open every event node that can report B (the touchscreen cannot). */
+static void keys_open(void)
+{
+	DIR *d = opendir("/dev/input");
+	struct dirent *de;
+	char path[320];
 	unsigned long keybits[(KEY_MAX + 8 * sizeof(unsigned long)) /
 			      (8 * sizeof(unsigned long))];
 
-	memset(absbits, 0, sizeof(absbits));
-	memset(keybits, 0, sizeof(keybits));
-	if (ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(absbits)), absbits) < 0)
-		return 0;
-	if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keybits)), keybits) < 0)
-		return 0;
-	return !!(absbits[ABS_X / (8 * sizeof(unsigned long))] &
-		  (1UL << (ABS_X % (8 * sizeof(unsigned long))))) &&
-	       !!(absbits[ABS_Y / (8 * sizeof(unsigned long))] &
-		  (1UL << (ABS_Y % (8 * sizeof(unsigned long))))) &&
-	       !!(keybits[BTN_TOUCH / (8 * sizeof(unsigned long))] &
-		  (1UL << (BTN_TOUCH % (8 * sizeof(unsigned long)))));
-}
+	if (!d)
+		return;
+	while ((de = readdir(d)) != NULL && nkeys < MAXKEYS) {
+		int fd;
 
-static int open_touch(const char *want)
-{
-	int i, fd = -1;
-
-	if (want && (fd = open(want, O_RDONLY | O_NONBLOCK)) >= 0)
-		return fd;
-	for (i = 0; i < 16; i++) {
-		char p[64];
-
-		snprintf(p, sizeof(p), "/dev/input/event%d", i);
-		fd = open(p, O_RDONLY | O_NONBLOCK);
+		if (strncmp(de->d_name, "event", 5))
+			continue;
+		snprintf(path, sizeof(path), "/dev/input/%s", de->d_name);
+		fd = open(path, O_RDONLY | O_NONBLOCK);
 		if (fd < 0)
 			continue;
-		if (is_touchscreen(fd))
-			return fd;
-		close(fd);
+		memset(keybits, 0, sizeof(keybits));
+		ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(keybits)), keybits);
+		if (has_bit(keybits, KEY_B_MAPPED) || has_bit(keybits, BTN_B))
+			keyfd[nkeys++] = fd;
+		else
+			close(fd);
 	}
+	closedir(d);
+	if (!nkeys)
+		printf("tscal: no button device found, B (undo) is not available\n");
+}
+
+/* Drain the button queues; 1 if B went down since the last call. */
+static int b_pressed(void)
+{
+	struct input_event ev;
+	int i, hit = 0;
+
+	for (i = 0; i < nkeys; i++)
+		while (read(keyfd[i], &ev, sizeof(ev)) == sizeof(ev))
+			if (ev.type == EV_KEY && ev.value == 1 &&
+			    (ev.code == KEY_B_MAPPED || ev.code == BTN_B))
+				hit = 1;
+	return hit;
+}
+
+/* ---- raw digitizer values, straight from the driver's sysfs ---------- */
+
+struct raw {
+	int fx, fy, fd;
+	int ev;		/* the evdev node; see raw_open() */
+};
+
+static int slurp(const char *path, char *buf, size_t n)
+{
+	int fd = open(path, O_RDONLY);
+	ssize_t r;
+
+	if (fd < 0)
+		return -1;
+	r = read(fd, buf, n - 1);
+	close(fd);
+	if (r < 0)
+		return -1;
+	buf[r] = 0;
+	return 0;
+}
+
+static int raw_open(struct raw *r)
+{
+	DIR *d = opendir("/sys/class/input");
+	struct dirent *de;
+	char path[320], name[96];
+
+	r->fx = r->fy = r->fd = r->ev = -1;
+	if (!d)
+		return -1;
+	while ((de = readdir(d)) != NULL) {
+		if (strncmp(de->d_name, "input", 5))
+			continue;
+		snprintf(path, sizeof(path), "/sys/class/input/%s/name", de->d_name);
+		if (slurp(path, name, sizeof(name)) < 0 ||
+		    !strstr(name, "Touchscreen"))
+			continue;
+		snprintf(path, sizeof(path), "/sys/class/input/%s/raw_x", de->d_name);
+		r->fx = open(path, O_RDONLY);
+		snprintf(path, sizeof(path), "/sys/class/input/%s/raw_y", de->d_name);
+		r->fy = open(path, O_RDONLY);
+		snprintf(path, sizeof(path), "/sys/class/input/%s/raw_down", de->d_name);
+		r->fd = open(path, O_RDONLY);
+		if (r->fx >= 0 && r->fy >= 0 && r->fd >= 0) {
+			/*
+			 * The driver polls the digitizer only while something
+			 * has its evdev node open, so raw_x/raw_y/raw_down stay
+			 * frozen until we open it too.  Nothing is read from it.
+			 */
+			DIR *c;
+			struct dirent *ce;
+
+			snprintf(path, sizeof(path), "/sys/class/input/%s", de->d_name);
+			c = opendir(path);
+			while (c && (ce = readdir(c)) != NULL) {
+				if (strncmp(ce->d_name, "event", 5))
+					continue;
+				snprintf(path, sizeof(path), "/dev/input/%s", ce->d_name);
+				r->ev = open(path, O_RDONLY | O_NONBLOCK);
+				if (r->ev >= 0)
+					break;
+			}
+			if (c)
+				closedir(c);
+			if (r->ev < 0)
+				printf("tscal: cannot open the evdev node, raw values may not update\n");
+			printf("tscal: raw values from /sys/class/input/%s (%s)\n",
+			       de->d_name, strtok(name, "\n"));
+			closedir(d);
+			return 0;
+		}
+		if (r->fx >= 0) close(r->fx);
+		if (r->fy >= 0) close(r->fy);
+		if (r->fd >= 0) close(r->fd);
+		r->fx = r->fy = r->fd = -1;
+	}
+	closedir(d);
 	return -1;
 }
 
-/*
- * The affine calibration the kernel is currently applying, so a tap can be
- * inverted back to the raw ADC value the orientation sweep needs to see.
- * The defaults are what the driver falls back to when nobody has measured
- * anything; they are deliberately *not* 0..4095 (see the header).
- */
-static void read_proc_cal(int *x0, int *x1, int *y0, int *y1)
+static int raw_read(int fd)
 {
-	FILE *f = fopen("/proc/ctr_touch_cal", "r");
+	char b[16];
+	ssize_t n = pread(fd, b, sizeof(b) - 1, 0);
 
-	*x0 = 0;
-	*x1 = MAX_12BIT;
-	*y0 = 0;
-	*y1 = MAX_12BIT;
-	if (!f)
-		return;
-	if (fscanf(f, "%d %d %d %d", x0, x1, y0, y1) != 4 ||
-	    *x1 - *x0 < 16 || *y1 - *y0 < 16 ||
-	    *x0 < 0 || *y0 < 0 || *x1 > MAX_12BIT || *y1 > MAX_12BIT) {
-		*x0 = 0;
-		*x1 = MAX_12BIT;
-		*y0 = 0;
-		*y1 = MAX_12BIT;
-	}
-	fclose(f);
-	printf("tscal: active kernel calibration x0=%d x1=%d y0=%d y1=%d\n",
-	       *x0, *x1, *y0, *y1);
-	fflush(stdout);
+	if (n <= 0)
+		return -1;
+	b[n] = 0;
+	return atoi(b);
 }
 
-static void map_raw(int m, int rx, int ry, int *x, int *y)
+static int cmp_int(const void *a, const void *b)
 {
-	unsigned int mx = (unsigned int)rx, my = (unsigned int)ry;
-
-	if (m & 1) {
-		unsigned int t = mx;
-
-		mx = my;
-		my = t;
-	}
-	*x = (int)(mx * 320 / MAX_12BIT);
-	*y = (int)(my * 240 / MAX_12BIT);
-	if (m & 2)
-		*x = 319 - *x;
-	if (m & 4)
-		*y = 239 - *y;
-}
-
-static int read_proc_map(void)
-{
-	FILE *f = fopen("/proc/ctr_touch_map", "r");
-	int m = 0;
-
-	if (f) {
-		if (fscanf(f, "%d", &m) != 1)
-			m = 0;
-		fclose(f);
-	}
-	return m & 7;
+	return *(const int *)a - *(const int *)b;
 }
 
 /*
- * Invert the mapping the kernel is *currently* applying.
- *
- * The kernel already turns the raw 12-bit ADC sample into the landscape
- * screen coordinate using ctr_touch_map, and that is what the input device
- * reports as ABS_X/ABS_Y.  Scoring the eight candidate mappings on those
- * values would map them a second time ("raw=(0x01a,0x013) map3=(318,1)" for a
- * tap at (20,20)) and pick a random winner.  Undo the active map first so the
- * scorer sees the raw ADC values it expects and can compare the eight
- * candidates honestly.
+ * Wait for one complete tap and return the median raw position over the
+ * steady part of the press.  The first SETTLE_MS are dropped (the contact
+ * resistance is still ramping) and so is the last quarter (the finger is
+ * already lifting).  Returns 0 = tap, 1 = too short / unreadable (ask again),
+ * 2 = B pressed (undo), -1 = nobody touched anything within TSCAL_TIMEOUT.
  */
-static void unmap_active(int d, int ex, int ey,
-			int cx0, int cx1, int cy0, int cy1,
-			int *rx, int *ry)
+static int wait_tap(struct raw *r, struct fb *f, const int (*tgt)[2], int i,
+		    unsigned int fg, unsigned int bg, int *rx, int *ry)
 {
-	int mx = ex, my = ey;
+	static int xs[MAX_SAMPLES], ys[MAX_SAMPLES];
+	time_t deadline = time(NULL) + TSCAL_TIMEOUT, last_paint = time(NULL);
+	int n = 0, up_polls = 0, down = 0, ms = 0, lo, hi;
 
-	/* undo invert-x / invert-y (applied last by the kernel) */
-	if (d & 2)
-		mx = 319 - mx;
-	if (d & 4)
-		my = 239 - my;
+	for (;;) {
+		int d = raw_read(r->fd);
 
-	/* undo the affine calibration: screen 0..320 came from x0..x1 */
-	mx = cx0 + mx * (cx1 - cx0) / 320;
-	my = cy0 + my * (cy1 - cy0) / 240;
+		if (d < 0) {
+			usleep(POLL_US);
+			continue;
+		}
+		if (!down) {
+			if (b_pressed())
+				return 2;
+			if (d) {
+				down = 1;
+				n = ms = 0;
+				up_polls = 0;
+			} else {
+				if (time(NULL) >= deadline)
+					return -1;
+				if (time(NULL) != last_paint) {
+					last_paint = time(NULL);
+					paint_target(f, tgt, i, fg, bg);
+				}
+			}
+		} else if (d) {
+			up_polls = 0;
+			ms += POLL_US / 1000;
+			if (ms > SETTLE_MS && n < MAX_SAMPLES) {
+				int x = raw_read(r->fx), y = raw_read(r->fy);
 
-	/* undo the swap (applied first by the kernel) */
-	if (d & 1) {
-		int t = mx;
-
-		mx = my;
-		my = t;
+				/* 0 and 4095 are rails, not positions */
+				if (x > 0 && x < 4095 && y > 0 && y < 4095) {
+					xs[n] = x;
+					ys[n] = y;
+					n++;
+				}
+			}
+		} else if (++up_polls >= 3) {
+			break;
+		}
+		usleep(POLL_US);
 	}
-	*rx = mx;
-	*ry = my;
+	if (n < MIN_SAMPLES)
+		return 1;
+	lo = n / 4;
+	hi = n - n / 4;
+	qsort(xs + lo, hi - lo, sizeof(int), cmp_int);
+	qsort(ys + lo, hi - lo, sizeof(int), cmp_int);
+	*rx = xs[lo + (hi - lo) / 2];
+	*ry = ys[lo + (hi - lo) / 2];
+	return 0;
 }
 
 /*
- * Least-squares fit of screen = k * raw + c over the tapped targets, and from
- * it the raw values at screen 0 and screen 319, which is what the driver's
- *
- *     screen = (raw - edge0) * 320 / (edge1 - edge0)
- *
- * form expects.  Returns 0 on success and -1 when the fit is not trustworthy
- * (not enough spread, or a gain that is not positive -- both mean the taps
- * were not a usable calibration, and applying them would move every touch).
+ * Least-squares line  screen = k * raw + c  over n points; returns the raw
+ * values that sit at screen positions p0 and p1.  -1 when the taps are not a
+ * usable calibration (no spread, or a gain that is not positive).
  */
-static int fit_axis(const int *raw, const int *target, int n,
-		    int *edge0, int *edge1, double *rms)
+static int fit_axis(const int *raw, const int *scr, int n, int p0, int p1,
+		    int *r0, int *r1, double *rms)
 {
-	double sa = 0, st = 0, saa = 0, sat = 0, e2 = 0, amean, tmean, k, c;
+	double sa = 0, st = 0, saa = 0, sat = 0, e2 = 0, am, tm, k, c;
 	int i;
 
 	for (i = 0; i < n; i++) {
 		sa += raw[i];
-		st += target[i];
+		st += scr[i];
 	}
-	amean = sa / n;
-	tmean = st / n;
+	am = sa / n;
+	tm = st / n;
 	for (i = 0; i < n; i++) {
-		double da = raw[i] - amean, dt = target[i] - tmean;
-
-		saa += da * da;
-		sat += da * dt;
+		saa += (raw[i] - am) * (raw[i] - am);
+		sat += (raw[i] - am) * (scr[i] - tm);
 	}
 	if (saa < 16.0 || sat <= 0.0)
 		return -1;
 	k = sat / saa;
-	c = tmean - k * amean;
-	if (k <= 0.0)
-		return -1;
+	c = tm - k * am;
 	for (i = 0; i < n; i++) {
-		double d = (k * raw[i] + c) - target[i];
+		double e = k * raw[i] + c - scr[i];
 
-		e2 += d * d;
+		e2 += e * e;
 	}
 	*rms = sqrt(e2 / n);
-	*edge0 = (int)(-c / k);
-	*edge1 = (int)(-c / k + 319.0 / k);
+	*r0 = (int)lround((p0 - c) / k);
+	*r1 = (int)lround((p1 - c) / k);
 	return 0;
 }
 
-static long long score(int m, const int *rx, const int *ry,
-		       const int *tx, const int *ty, int n)
+/* Fit one axis, dropping the single worst tap once if it spoils the fit. */
+static int fit_robust(int *raw, int *scr, int *n, int p0, int p1,
+		      int *r0, int *r1, double *rms, const char *axis)
 {
-	long long e = 0;
-	int i;
+	int i, worst = -1;
+	double wd = 0, k;
 
-	for (i = 0; i < n; i++) {
-		int x, y, dx, dy;
+	if (fit_axis(raw, scr, *n, p0, p1, r0, r1, rms))
+		return -1;
+	if (*rms <= MAX_RMS || *n < 5)
+		return 0;
+	k = (double)(p1 - p0) / (double)(*r1 - *r0);
+	for (i = 0; i < *n; i++) {
+		double e = fabs(k * (raw[i] - *r0) + p0 - scr[i]);
 
-		map_raw(m, rx[i], ry[i], &x, &y);
-		dx = x - tx[i];
-		dy = y - ty[i];
-		e += (long long)dx * dx + (long long)dy * dy;
+		if (e > wd) {
+			wd = e;
+			worst = i;
+		}
 	}
-	return e;
+	printf("tscal: %s: dropping tap %d (%.0f px off the line)\n",
+	       axis, worst + 1, wd);
+	for (i = worst; i < *n - 1; i++) {
+		raw[i] = raw[i + 1];
+		scr[i] = scr[i + 1];
+	}
+	(*n)--;
+	return fit_axis(raw, scr, *n, p0, p1, r0, r1, rms);
+}
+
+static int set_param(const char *name, int v)
+{
+	char path[96];
+	FILE *f;
+
+	snprintf(path, sizeof(path), PARAM_DIR "/%s", name);
+	f = fopen(path, "w");
+	if (!f) {
+		printf("tscal: cannot write %s: %s\n", path, strerror(errno));
+		return -1;
+	}
+	fprintf(f, "%d\n", v);
+	return fclose(f) ? -1 : 0;
 }
 
 int main(int argc, char **argv)
 {
-	const char *fbpath = argc > 1 ? argv[1] : "/dev/fb1";
-	const char *inpath = argc > 2 ? argv[2] : NULL;
-	const char *mappath = argc > 3 ? argv[3] : NULL;
-	const char *calpath = argc > 4 ? argv[4] : NULL;
+	const char *fbpath = argc > 1 && argv[1][0] ? argv[1] : "/dev/fb1";
+	const char *calpath = argc > 2 && argv[2][0] ? argv[2] : NULL;
 	static const int tgt[NUM_TARGETS][2] = {
-		{ 14, 12 }, { 305, 12 }, { 14, 227 }, { 305, 227 }, { 160, 120 }
+		{ CAL_X0, CAL_Y0 }, { CAL_X1, CAL_Y0 },
+		{ CAL_X0, CAL_Y1 }, { CAL_X1, CAL_Y1 }, { 160, 120 }
 	};
 	struct fb f;
-	struct input_event ev;
-	int tfd, i, n = 0;
+	struct raw r;
+	int i, n = 0, ny, ok;
 	int rx[NUM_TARGETS], ry[NUM_TARGETS];
-	int tx[NUM_TARGETS], ty[NUM_TARGETS];
+	int sx[NUM_TARGETS], sy[NUM_TARGETS];
+	int x0 = 0, x1 = 0, y0 = 0, y1 = 0;
+	double xrms = 0, yrms = 0;
 	unsigned int fg, bg;
-	long long best = -1;
-	int bestm = -1;
-	int active;
-	int cx0, cx1, cy0, cy1; /* calibration the kernel is applying right now */
-	int vx[NUM_TARGETS], vy[NUM_TARGETS];  /* post-swap raw: the calibrated axes */
-	int rtx = 0, rty = 0;   /* recovered raw ADC values of the current tap */
 
 	memset(&f, 0, sizeof(f));
 	if (fb_open(&f, fbpath) < 0)
 		return 1;
-	tfd = open_touch(inpath);
-	if (tfd < 0) {
-		fprintf(stderr, "tscal: no touchscreen node found\n");
+	if (raw_open(&r) < 0) {
+		fprintf(stderr, "tscal: no touchscreen raw_x/raw_y/raw_down in "
+			"/sys/class/input\n");
 		return 1;
 	}
+	keys_open();
+	b_pressed();	/* a B pressed before the first target is not an undo */
 	fg = pack_rgb(&f, 0x00, 0xff, 0x40);
 	bg = pack_rgb(&f, 0x00, 0x00, 0x00);
-	/* Our targets share the bottom screen with the boot-log renderer. */
 	if (kill_log_renderers() > 0)
 		fflush(stdout);
-
-	active = read_proc_map();
-	read_proc_cal(&cx0, &cx1, &cy0, &cy1);
-	printf("tscal: fb=%s %dx%d %dbpp, touch fd=%d, active kernel map=%d\n",
-	       fbpath, f.var.xres, f.var.yres, f.bpp, tfd, active);
+	printf("tscal: fb=%s %dx%d %dbpp\n", fbpath, f.var.xres, f.var.yres,
+	       f.bpp);
 	fflush(stdout);
 
-	for (i = 0; i < NUM_TARGETS; i++) {
-		int x = 0, y = 0, down = 0, got = 0;
-		time_t deadline = time(NULL) + TSCAL_TIMEOUT;
+	for (;;) {
+		for (i = n; i < NUM_TARGETS; i++) {
+			int got, x = 0, y = 0;
 
-		paint_target(&f, tgt, i, fg, bg);
-		printf("tscal: target %d/%d screen=(%d,%d) -- tap it\n",
-		       i + 1, NUM_TARGETS, tgt[i][0], tgt[i][1]);
-		fflush(stdout);
-
-		{
-		time_t last_paint = time(NULL);
-
-		while (!got && time(NULL) < deadline) {
-			fd_set rfds;
-			struct timeval tv = { 1, 0 };
-			int r;
-
-			FD_ZERO(&rfds);
-			FD_SET(tfd, &rfds);
-			r = select(tfd + 1, &rfds, NULL, NULL, &tv);
-			if (time(NULL) != last_paint) {
-				last_paint = time(NULL);
+			for (;;) {
 				paint_target(&f, tgt, i, fg, bg);
-			}
-			if (r <= 0)
-				continue;
-			while (read(tfd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
-				if (ev.type == EV_ABS && ev.code == ABS_X)
-					x = ev.value;
-				else if (ev.type == EV_ABS && ev.code == ABS_Y)
-					y = ev.value;
-				else if (ev.type == EV_KEY && ev.code == BTN_TOUCH)
-					down = ev.value;
-				else if (ev.type == EV_SYN && down) {
-					got = 1;
-					break;
-				}
-			}
-		}
-		if (!got) {
-			printf("tscal: target %d timed out\n", i + 1);
-			fflush(stdout);
-			break;
-		}
-		/*
-		 * Did the finger actually hit what was drawn?  Only evdev
-		 * coordinates are known here, and with a calibration that is
-		 * still roughly right, a miss shows up immediately.  Reject and
-		 * ask again rather than record a point that is nowhere near its
-		 * target -- one such point is enough to make the fit useless.
-		 */
-		{
-			int dx = x - tgt[i][0], dy = y - tgt[i][1];
-			int err = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
-
-			if (err > TSCAL_MAXERR) {
-				printf("tscal: target %d ev=(%d,%d) is %d px from "
-				       "(%d,%d) -- MISS, tap the ring again\n",
-				       i + 1, x, y, err, tgt[i][0], tgt[i][1]);
+				printf("tscal: target %d/%d screen=(%d,%d) -- tap it\n",
+				       i + 1, NUM_TARGETS, tgt[i][0], tgt[i][1]);
 				fflush(stdout);
-				/* wait for the finger to come up before re-arming */
-				while (read(tfd, &ev, sizeof(ev)) ==
-				       (ssize_t)sizeof(ev)) {
-					if (ev.type == EV_KEY &&
-					    ev.code == BTN_TOUCH && !ev.value)
-						break;
-					if (ev.type == EV_SYN)
-						break;
-				}
-				usleep(300000);
-				continue;	/* same target, drawn again */
+				got = wait_tap(&r, &f, tgt, i, fg, bg, &x, &y);
+				if (got != 1)
+					break;
+				printf("tscal: tap too short, again\n");
+				fflush(stdout);
 			}
-		}
-		}
-		unmap_active(active, x, y, cx0, cx1, cy0, cy1, &rtx, &rty);
-		rx[n] = rtx;
-		ry[n] = rty;
-		tx[n] = tgt[i][0];
-		ty[n] = tgt[i][1];
-		{
-			int mx, my;
-
-			map_raw(active, rtx, rty, &mx, &my);
-			printf("tscal: target %d ev=(%d,%d) raw=(0x%03x,0x%03x) "
-			       "(active map %d -> %d,%d)\n",
-			       i + 1, x, y, rtx, rty, active, mx, my);
+			if (got < 0) {
+				printf("tscal: target %d timed out\n", i + 1);
+				fflush(stdout);
+				break;
+			}
+			if (got == 2) {
+				/* B: forget the previous tap and ask for it again */
+				if (n > 0) {
+					n--;
+					printf("tscal: B -- undid tap %d\n", n + 1);
+					i -= 2;
+				} else {
+					printf("tscal: B -- nothing to undo\n");
+					i--;
+				}
+				fflush(stdout);
+				continue;
+			}
+			rx[n] = x;
+			ry[n] = y;
+			sx[n] = tgt[i][0];
+			sy[n] = tgt[i][1];
+			printf("tscal: target %d screen=(%d,%d) raw=(%d,%d)\n", i + 1,
+			       sx[n], sy[n], x, y);
 			fflush(stdout);
+			n++;
+			/* the next target must be a fresh tap */
+			usleep(300000);
+			while (raw_read(r.fd) > 0)
+				usleep(POLL_US);
 		}
-		n++;
-		/* wait for release so the next target is a fresh tap */
-		while (read(tfd, &ev, sizeof(ev)) == (ssize_t)sizeof(ev)) {
-			if (ev.type == EV_KEY && ev.code == BTN_TOUCH && !ev.value)
-				break;
-			if (ev.type == EV_SYN)
-				break;
-		}
-		usleep(200000);
+		if (n < NUM_TARGETS)
+			break;
+		/* last tap in: a few seconds to take it back before it is used */
+		clear(&f, bg);
+		text(&f, 56, 100, "All five taps are in.", fg);
+		text(&f, 56, 112, "Saving in a moment...", fg);
+		text(&f, 56, 124, "B = undo the last tap", fg);
+		fb_flip(&f);
+		for (i = 0; i < CONFIRM_SECS * 50 && !b_pressed(); i++)
+			usleep(20000);
+		if (i == CONFIRM_SECS * 50)
+			break;
+		n--;
+		printf("tscal: B -- undid tap %d\n", n + 1);
+		fflush(stdout);
 	}
 
 	clear(&f, bg);
 	fb_flip(&f);
 
-	if (n < 2) {
-		printf("tscal: not enough taps (%d), leaving mapping unchanged\n", n);
+	if (n < NUM_TARGETS) {
+		printf("tscal: only %d of %d taps, leaving the calibration unchanged\n",
+		       n, NUM_TARGETS);
 		fflush(stdout);
 		return 1;
 	}
 
-	for (i = 0; i < 8; i++) {
-		long long e = score(i, rx, ry, tx, ty, n);
-		printf("tscal: map %d score %lld\n", i, e);
-		if (best < 0 || e < best) {
-			best = e;
-			bestm = i;
-		}
-	}
-	printf("tscal: best map=%d score=%lld (n=%d)\n", bestm, best, n);
-	fflush(stdout);
-
-	if (mappath) {
-		FILE *m = fopen(mappath, "w");
-
-		if (m) {
-			fprintf(m, "%d\n", bestm);
-			fclose(m);
-		}
-	}
-	{
-		FILE *m = fopen("/proc/ctr_touch_map", "w");
-
-		if (m) {
-			fprintf(m, "%d\n", bestm);
-			fclose(m);
-		}
-	}
-	printf("tscal: applied map=%d (bit0=swap, bit1=invert-x, bit2=invert-y)\n",
-	       bestm);
-	fflush(stdout);
-
-	/*
-	 * Now the same five taps give the calibration.  vx/vy hold the raw
-	 * pairs with the winning swap already applied, i.e. exactly the axes
-	 * the driver calibrates, and tx/ty the screen positions they should
-	 * have produced.
-	 */
-	{
-		int e0, e1, f0, f1, ok = 1, j;
-		double rx_ms = 0.0, ry_ms = 0.0;
-
-		/* Post-swap axes: the winning map decides which raw axis ends up
-		 * as screen X, and that is the axis the driver calibrates. */
-		for (j = 0; j < n; j++) {
-			vx[j] = (bestm & 1) ? ry[j] : rx[j];
-			vy[j] = (bestm & 1) ? rx[j] : ry[j];
-		}
-		/*
-		 * Drop outliers and refit.  The tap rejection above catches the
-		 * obvious cases, but a tap can still land just inside the window
-		 * and be a poor fit, and a single such point moves a
-		 * least-squares line a long way.  Refit without the worst point
-		 * while it is clearly the worst and enough points remain.
-		 */
-		for (j = 0; j < 4; j++) {
-			double dx = 0, dy = 0, wx = -1, wy = -1;
-			double kx, bx, ky, by;
-
-			if (n < 4 || fit_axis(vx, tx, n, &e0, &e1, &rx_ms) != 0 ||
-			    fit_axis(vy, ty, n, &f0, &f1, &ry_ms) != 0)
-				break;
-			kx = 319.0 / (double)(e1 - e0);
-			bx = tx[0] - kx * vx[0];
-			ky = 239.0 / (double)(f1 - f0);
-			by = ty[0] - ky * vy[0];
-			for (i = 0; i < n; i++) {
-				double ex = (kx * vx[i] + bx) - tx[i];
-				double ey = (ky * vy[i] + by) - ty[i];
-				double d;
-
-				if (ex < 0) ex = -ex;
-				if (ey < 0) ey = -ey;
-				d = ex + ey;
-				if (d > dx) { dx = d; wx = i; }
-				if (d > dy) { dy = d; wy = i; }
-			}
-			if (dx <= 12.0 && dy <= 12.0)
-				break;	/* everyone agrees, good enough */
-			{
-				int drop = (dx >= dy) ? (int)wx : (int)wy;
-
-				printf("tscal: dropping target %d as an outlier "
-				       "(%d px off the fitted line)\n",
-				       drop + 1,
-				       (int)(dx >= dy ? dx : dy));
-				for (i = drop; i < n - 1; i++) {
-					rx[i] = rx[i + 1];
-					ry[i] = ry[i + 1];
-					vx[i] = vx[i + 1];
-					vy[i] = vy[i + 1];
-					tx[i] = tx[i + 1];
-					ty[i] = ty[i + 1];
-				}
-				n--;
-				fflush(stdout);
-			}
-		}
-		if (fit_axis(vx, tx, n, &e0, &e1, &rx_ms) != 0 ||
-		    fit_axis(vy, ty, n, &f0, &f1, &ry_ms) != 0 ||
-		    e1 - e0 < 16 || f1 - f0 < 16 ||
-		    e0 < 0 || f0 < 0 || e1 > MAX_12BIT || f1 > MAX_12BIT ||
-		    rx_ms > 8.0 || ry_ms > 8.0) {
-			printf("tscal: calibration fit not usable "
-			       "(x rms=%.1f, y rms=%.1f), leaving the current one "
-			       "in place\n", rx_ms, ry_ms);
-			ok = 0;
-		}
-		if (ok) {
-			/* What the taps imply, before and after. */
-			for (i = 0; i < n; i++) {
-				int bx = vx[i] * 320 / MAX_12BIT;
-				int by = vy[i] * 240 / MAX_12BIT;
-				int ax = (vx[i] - e0) * 320 / (e1 - e0);
-				int ay = (vy[i] - f0) * 240 / (f1 - f0);
-
-				if (ax < 0) ax = 0;
-				if (ax > 319) ax = 319;
-				if (ay < 0) ay = 0;
-				if (ay > 239) ay = 239;
-				printf("tscal: target %d screen=(%d,%d) raw=(%d,%d) "
-				       "was (%d,%d) now (%d,%d)\n",
-				       i + 1, tx[i], ty[i], vx[i], vy[i],
-				       bx, by, ax, ay);
-			}
-			printf("tscal: applied cal x0=%d x1=%d y0=%d y1=%d "
-			       "(rms x %.1f px, y %.1f px)\n",
-			       e0, e1, f0, f1, rx_ms, ry_ms);
-			if (calpath) {
-				FILE *c = fopen(calpath, "w");
-
-				if (c) {
-					fprintf(c, "%d %d %d %d\n", e0, e1, f0, f1);
-					fclose(c);
-					printf("tscal: calibration saved to %s\n",
-					       calpath);
-				}
-			}
-			{
-				FILE *c = fopen("/proc/ctr_touch_cal", "w");
-
-				if (c) {
-					fprintf(c, "%d %d %d %d\n",
-						e0, e1, f0, f1);
-					fclose(c);
-				}
-			}
-		}
+	ny = n;
+	ok = !fit_robust(rx, sx, &n, CAL_X0, CAL_X1, &x0, &x1, &xrms, "x") &&
+	     !fit_robust(ry, sy, &ny, CAL_Y0, CAL_Y1, &y0, &y1, &yrms, "y");
+	if (!ok || xrms > MAX_RMS || yrms > MAX_RMS ||
+	    x1 - x0 < 1500 || y1 - y0 < 1500 ||
+	    x0 < 1 || y0 < 1 || x1 > 4094 || y1 > 4094) {
+		printf("tscal: fit not usable (x %d..%d rms %.1f px, y %d..%d rms "
+		       "%.1f px), leaving the calibration unchanged\n",
+		       x0, x1, xrms, y0, y1, yrms);
 		fflush(stdout);
+		return 1;
 	}
-	close(tfd);
+	/* How well a straight line explains this panel, per tap. */
+	for (i = 0; i < n; i++) {
+		double e = (double)(CAL_X1 - CAL_X0) * (rx[i] - x0) / (x1 - x0) +
+			   CAL_X0 - sx[i];
+
+		printf("tscal: x tap at screen %3d: raw %4d, line says %.1f (error %+.1f px)\n",
+		       sx[i], rx[i], e + sx[i], e);
+	}
+	for (i = 0; i < ny; i++) {
+		double e = (double)(CAL_Y1 - CAL_Y0) * (ry[i] - y0) / (y1 - y0) +
+			   CAL_Y0 - sy[i];
+
+		printf("tscal: y tap at screen %3d: raw %4d, line says %.1f (error %+.1f px)\n",
+		       sy[i], ry[i], e + sy[i], e);
+	}
+	if (set_param("cal_x0_raw", x0) || set_param("cal_x0_px", CAL_X0) ||
+	    set_param("cal_x1_raw", x1) || set_param("cal_x1_px", CAL_X1) ||
+	    set_param("cal_y0_raw", y0) || set_param("cal_y0_px", CAL_Y0) ||
+	    set_param("cal_y1_raw", y1) || set_param("cal_y1_px", CAL_Y1)) {
+		printf("tscal: could not apply the calibration to the driver\n");
+		fflush(stdout);
+		return 1;
+	}
+	printf("tscal: applied cal x0=%d x1=%d y0=%d y1=%d (raw at screen x%d x%d y%d y%d; "
+	       "rms x %.1f px, y %.1f px)\n", x0, x1, y0, y1, CAL_X0, CAL_X1,
+	       CAL_Y0, CAL_Y1, xrms, yrms);
+	if (calpath) {
+		FILE *c = fopen(calpath, "w");
+
+		if (c) {
+			fprintf(c, "%d %d %d %d\n", x0, x1, y0, y1);
+			fflush(c);
+			fsync(fileno(c));
+			fclose(c);
+			printf("tscal: calibration saved to %s\n", calpath);
+		} else {
+			printf("tscal: cannot save %s: %s\n", calpath,
+			       strerror(errno));
+		}
+	}
+	fflush(stdout);
 	return 0;
 }
