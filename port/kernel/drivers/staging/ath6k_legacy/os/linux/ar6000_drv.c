@@ -3514,6 +3514,24 @@ n3ds_eapol_trace(struct sk_buff *skb, const char *dir, atomic_t *counter,
     AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
         ("AR6002 EAPOL %s #%d len=%d conn=%d\n",
          dir, n, (int)A_NETBUF_LEN(skb), connected));
+
+    /* The whole frame, 32 bytes per line: with the PSK, both nonces and the
+     * supplicant's own PTK debug the MIC of message 2/4 can be recomputed
+     * offline, which tells a wrong passphrase from a corrupted frame. */
+    if (n <= 6) {
+        int off, len = (int)A_NETBUF_LEN(skb);
+
+        for (off = 0; off < len && off < 192; off += 32) {
+            int cnt = len - off < 32 ? len - off : 32;
+            char hex[32 * 2 + 1];
+            int i;
+
+            for (i = 0; i < cnt; i++)
+                snprintf(hex + i * 2, 3, "%02x", eth[off + i]);
+            AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
+                ("AR6002 EAPOL %s #%d @%03d %s\n", dir, n, off, hex));
+        }
+    }
 }
 
 /* N3DS_AR6014_RX_CENSUS: zero EAPOL frames is ambiguous between "nothing is

@@ -153,7 +153,7 @@ it off.
 | --- | --- |
 | Both screens stay dark | Wrong or missing DTB, or the payload never ran — check the file names under `/linux/` |
 | Bottom screen never leaves the boot log | Android did not reach SurfaceFlinger; read `CYANO3DS/init.log` and `android-log.txt` |
-| Touch lands in the wrong place | The touchscreen driver / calibration; see [DISPLAY.md](DISPLAY.md) and [CM7.md](CM7.md) |
+| Touch lands in the wrong place | Create an empty `CYANO3DS/calibrate` file on the card and boot: tap the five crosses on the bottom screen. |
 | An app installs but crashes on launch | It calls APIs newer than API 10, or needs `armeabi-v7a` |
 | `UnsatisfiedLinkError` on launch | The APK is missing its `lib/armeabi/*.so` |
 | Boot hangs before the initramfs messages | `initramfs.cpio.gz` is larger than 8 MiB, or the card is not readable |
