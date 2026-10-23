@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""External storage (2026-10-14): the card as Android's mounted /mnt/sdcard.
+"""External storage: the card as Android's mounted /mnt/sdcard.
 
 The init mounts the card with vold's ownership/masks and binds it at
 /mnt/sdcard; fakevold stands in for vold and reports it mounted; the kernel

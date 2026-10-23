@@ -1,9 +1,8 @@
-# Legacy init.rc delta for the prebuilt flavors, kept for reference
+# init.rc delta for the prebuilt flavors, kept for reference
 #
-# This is NOT a complete init.rc.  The stock
-# frameworks/base/cmds/bootanimation + system/core/rootdir/init.rc is used as
-# the base; this file lists the changes the 3DS port needs.  Apply it with
-# legacy/apply-userland-port.sh (the copy step is part of M3).
+# This is NOT a complete init.rc and no build script installs it.  The stock
+# system/core/rootdir/init.rc is the base; this file lists the changes the 3DS
+# port needs.
 #
 # Boot flow on the 3DS:
 #
@@ -55,7 +54,7 @@ on init
 #   a) let ueventd create it (ueventd.nintendo3ds.rc has the rule), or
 #   b) pin it by passing  ashmem.minor=<n>  (init_module style is not available
 #      for built-in drivers) - simplest is (a), plus a `symlink` fallback.
-# The M2 bring-up image already proves the device is present; check with
+# Check that the device is present with
 #   ls -l /sys/class/misc/ashmem/dev
 
 # ---------------------------------------------------------------------------
@@ -90,7 +89,7 @@ service zygote /system/bin/app_process -Xzygote /system/bin --zygote --start-sys
 
 service media /system/bin/mediaserver
     # writes to /dev/log/main and /dev/log/events; without the 2009 logger
-    # driver these writes fail silently (that is fine for M3)
+    # driver these writes fail silently
 
 service surfaceflinger /system/bin/surfaceflinger
     user system

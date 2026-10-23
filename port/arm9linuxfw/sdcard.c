@@ -23,9 +23,9 @@
  *   4. drops the VIRTIO_BLK_F_RO feature bit, which is what makes the kernel
  *      consider the device writable in the first place.
  *
- * The sector cursor is now per request (a local variable) instead of being
- * stashed in the virtqueue's private word, so concurrent/queued requests can
- * no longer corrupt each other's offsets.
+ * The sector cursor is per request (a local variable) rather than stashed in
+ * the virtqueue's private word, so concurrent/queued requests cannot corrupt
+ * each other's offsets.
  *
  * Cache safety: the ARM9 side of this firmware performs no cache maintenance
  * for the data buffer (and enables no caches), and the ARM11 (Linux) side does

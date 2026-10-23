@@ -7,7 +7,7 @@
 #                       artefact, not the build tree)
 #   /bin/busybox        static armel busybox + applet symlinks
 #   /bin/fbtest         fbdev/display self test (diagnostic boots)
-#   /bin/fbsay          renders text on a framebuffer; used to page the boot
+#   /bin/fbsay          renders text on a framebuffer; pages the boot
 #                       log onto the BOTTOM screen on diagnostic boots
 #                       (CYANO3DS/diag).  Normal boots keep the log on the
 #                       top-screen console.
@@ -28,10 +28,10 @@ MINIMAL_DIAGNOSTICS="${MINIMAL_DIAGNOSTICS:-0}"
 # ---------------------------------------------------------------------------
 # Android flavor.  The kernel and the bring-up machinery are shared; only the
 # userspace files (the boot-stage directory, the /data restore tar name and the
-# user-visible log strings) differ.  Default is CM7.2, the current target; the
-# archived prebuilt flavors are still selectable with ANDROID_FLAVOR=froyo or
-# ANDROID_FLAVOR=gingerbread; ANDROID_FLAVOR=cm6 is the CyanogenMod 6 (Froyo)
-# source build for the old 3DS (out/cm6-init).
+# user-visible log strings) differ.  Default is CM7.2; ANDROID_FLAVOR=cm6 is the
+# CyanogenMod 6 (Froyo) source build for the Old 3DS (out/cm6-init).  The
+# froyo and gingerbread flavors take a prebuilt boot stage from
+# out/froyo-init or out/gingerbread-init.
 # ---------------------------------------------------------------------------
 ANDROID_FLAVOR="${ANDROID_FLAVOR:-cm7}"
 case "$ANDROID_FLAVOR" in
@@ -89,7 +89,6 @@ say "Wi-Fi firmware (Atheros AR6014G / Octoblimp staging ath6k)"
 REPO_DIR="$(cd "$PORT/.." && pwd)"
 # NWM_DIR overrides.  Default: firmware/ath6k/AR6002/nwm in the checkout.
 NWM="${NWM_DIR:-$REPO_DIR/firmware/ath6k/AR6002/nwm}"
-[ -f "$NWM/stub_code.bin" ] || NWM="$REPO_DIR/work/wifi/carve_norm/nwm"
 if [ -f "$NWM/stub_code.bin" ] && [ -f "$NWM/main_type4.bin" ]; then
 	mkdir -p "$ROOT/lib/firmware/ath6k/AR6002/nwm"
 	cp "$NWM/stub_data.bin" "$NWM/stub_code.bin" \
@@ -102,13 +101,12 @@ if [ -f "$NWM/stub_code.bin" ] && [ -f "$NWM/main_type4.bin" ]; then
 else
 	echo "    WARNING: no NWM Wi-Fi blobs in $NWM (set NWM_DIR or copy them to firmware/ath6k/AR6002/nwm/; see docs/BUILD.md step 7) — ath6k will fail its firmware load" >&2
 fi
-# Keep the AR6014 SDK-style set around too (was the old mainline ath6kl path).
+# Optional SDK-style AR6014 and generic AR6002 sets, installed when present.
 WFW="${WFW_DIR:-$REPO_DIR/firmware/ath6k/AR6014}"
 if [ -f "$WFW/athwlan.bin.z77" ]; then
 	mkdir -p "$ROOT/lib/firmware/ath6k/AR6014"
 	cp "$WFW"/* "$ROOT/lib/firmware/ath6k/AR6014/" 2>/dev/null || true
 fi
-# And the generic AR6002 set.
 WREV="${WREV_DIR:-$REPO_DIR/firmware/ath6k/AR6002}"
 if [ -f "$WREV/athwlan.bin.z77" ]; then
 	mkdir -p "$ROOT/lib/firmware/ath6k/AR6002"
@@ -122,8 +120,7 @@ command -v arm-linux-gnueabi-gcc >/dev/null || {
 	echo "arm-linux-gnueabi-gcc not found" >&2; exit 1; }
 
 # Build busybox into the repo's tools/ dir by default (writable by the
-# current user); override with BBDIR.  This used to be hardcoded to
-# /root/p3ds/tools, which only worked when run as root.
+# current user); override with BBDIR.
 BBDIR="${BBDIR:-$PORT/../tools}"
 BB="$BBDIR/busybox-armel"
 if [ ! -x "$BB" ]; then
@@ -141,14 +138,12 @@ file "$BB" | sed 's/^/    /'
 cp "$BB" "$ROOT/bin/busybox"
 
 # Applet symlinks, relative to busybox like a normal install.  Deliberately no
-# "init" symlink: /init must be our script (the first version symlinked /init to
-# busybox and then wrote the script through the symlink - with the result that
-# busybox's own `init` applet ran instead, spawning shells on non-existent
-# /dev/tty2..tty4 and spamming "can't open /dev/ttyN" forever).
+# "init" symlink: /init must be our script (writing the script through such a
+# symlink would make busybox's own `init` applet run instead, spawning shells
+# on non-existent /dev/tty2..tty4 and spamming "can't open /dev/ttyN" forever).
 # Single source of truth for the applets the init script uses; the same list is
-# asserted against `busybox --list` after packing.  (Keeping two lists bit me:
-# `ln` was in the check but not in the symlink loop, so a symlink silently
-# failed at runtime.)
+# asserted against `busybox --list` after packing, so a missing applet fails
+# the build instead of a symlink at runtime.
 INIT_APPLETS="sh mount umount ln ls cat echo sleep dmesg tee sync mkdir mknod
              chmod chown rm mv cp df stat true false
              grep tail head cut tr hexdump dd wc ps free kill pidof poweroff
@@ -700,7 +695,7 @@ while true; do
 			    /proc/[0-9]*/stat 2>/dev/null | sort -rn | head -20
 		} >> "$D/appwatch.txt" 2>&1
 		sync
-		# heavy dumps now that the fast snapshot is safe on the card
+		# heavy dumps, once the fast snapshot is safe on the card
 		/bin/lateprobe "watch" stack
 		/bin/lateprobe "watchj" java
 		cp /mnt/probe/late-diag.txt "$D/late-diag.txt" 2>/dev/null
@@ -761,8 +756,8 @@ arm-linux-gnueabi-gcc -static -O2 -Wall \
 # even when the SD write path and printk are wedged).
 arm-linux-gnueabi-gcc -static -O2 -Wall \
 	-o "$ROOT/bin/hbfb" "$PORT/userland/tests/hbfb.c"
-# tsdump: raw evdev dump of the 3DS touchscreen, so an M4 boot answers whether
-# the input core delivers ABS_X/ABS_Y + BTN_TOUCH to userspace at all.
+# tsdump: raw evdev dump of the 3DS touchscreen, to check on a diagnostic boot
+# whether the input core delivers ABS_X/ABS_Y + BTN_TOUCH to userspace at all.
 arm-linux-gnueabi-gcc -static -O2 -Wall \
 	-o "$ROOT/bin/tsdump" "$PORT/userland/tests/tsdump.c"
 # tsmark: draw the touch position on the TOP screen, independent of Android, so
@@ -832,10 +827,10 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Legacy prebuilt boot stage: the archived flavor's init binary plus the init.rc that
-# legacy/build-android.sh patched for the 3DS (mounts removed, fb symlink, props).
-# If they are not there the script fails (C-19); set ALLOW_NO_ANDROID=1 to
-# build a bring-up-only initramfs anyway.
+# Android boot stage: the flavor's init binary plus its init.rc, patched for the
+# 3DS (mounts removed, fb symlink, props), from out/$ADIR (build-cm7-source.sh
+# or build-cm6-source.sh writes it).  If they are not there the script fails;
+# set ALLOW_NO_ANDROID=1 to build an initramfs without Android anyway.
 # ---------------------------------------------------------------------------
 AD="$PORT/../out/$ADIR"
 if [ -x "$AD/init" ] && [ -f "$AD/init.rc" ]; then
@@ -904,8 +899,8 @@ PY
 	# Nothing in the system publishes those properties here.  The stock
 	# publisher is the dhcpcd hook /system/etc/dhcpcd/dhcpcd-hooks/
 	# 95-configured ("setprop dhcp.${interface}.result ok"), and dhcpcd does
-	# run it -- the card log shows "executing `...dhcpcd-run-hooks', reason
-	# BOUND" right after it leases.  It cannot work, because
+	# run it ("executing `...dhcpcd-run-hooks', reason BOUND" right after
+	# the lease).  It cannot work reliably, because
 	# external/dhcpcd/dhcpcd.c:649 calls switchUser() as the *first* statement
 	# of main():
 	#
@@ -915,10 +910,10 @@ PY
 	# and init's property ACL (system/core/init/property_service.c:77) allows
 	# the "dhcp." prefix only to AID_SYSTEM (1000) or AID_ROOT -- the check is
 	# on the peer's uid *and* its single primary gid, and dhcpcd's primary gid
-	# is 1014 while its supplementary groups are 3003/2000.  So every setprop
-	# in the hook is refused.
+	# is 1014 while its supplementary groups are 3003/2000.  So the hook's
+	# setprops are refused (but see the property_perms note below).
 	#
-	# The observable result on the card is the whole failure mode of this port:
+	# Without a root publisher the log reads:
 	#
 	#   dhcpcd: offered 192.168.1.100 from 192.168.1.1
 	#   dhcpcd: acknowledged 192.168.1.100 from 192.168.1.1
@@ -941,12 +936,11 @@ PY
 	# skips the stock 95-configured hook so a *stopped* client cannot set
 	# result=failed underneath a request that is still waiting for "ok".
 	#
-	# (Correcting the ACL note: init's property_perms table does also list
-	# {"dhcp.", AID_DHCP, 0}, so the hook's setprops are not all refused --
-	# the 2026-10-04 18:36 boot caught the framework reading a result of
-	# "failed" that only the hook could have written.  The reason to publish
-	# from root anyway is ordering and ownership, not the ACL: one publisher,
-	# one writer, no race with a dying client.)
+	# (init's property_perms table does also list {"dhcp.", AID_DHCP, 0}, so
+	# some of the hook's setprops do land: a stopping client's stock hook can
+	# still publish result=failed.  Publishing from root is about ordering and
+	# ownership as much as the ACL: one publisher, one writer, no race with a
+	# dying client.)
 	#
 	# (Octoblimp's port solves the same problem the same way for the same
 	# framework generation: scripts/android_udhcpc.sh + a "service dhcpcd" in
@@ -958,24 +952,17 @@ PY
 # runs *instead of* the stock /system/etc/dhcpcd/dhcpcd-run-hooks, as dhcpcd's
 # uid 1014 (switchUser()).
 #
-# 2026-10-04 22:1x: the 21:5x boot ran this hook for real -- logcat has
-# "dhcpcd: executing `/bin/dhcpcd-hook.sh', reason BOUND" at 22:14:08, right
-# after "leased 192.168.1.100" -- and produced *nothing*: no trace line, no
-# lease file, no dhcp.wlan0.* properties (the framework timed out again), and
-# no "sys_prop: permission denied" in kmsg, i.e. setprop was never even
-# attempted.  Everything the previous hook did before its first visible action
-# was `skip_hooks=configured` and `. /system/etc/dhcpcd/dhcpcd-run-hooks`, so
-# the stock chain is gone now and the publication happens first, in the first
-# statements, with a file marker that survives to the SD card (logcat is not
-# available here: /dev/socket/logdriv is root:log 0771 and dhcpcd's gid is
-# 1014, so `log` from this hook cannot connect -- that is why a hook trace has
-# never been seen).
+# It does not source the stock /system/etc/dhcpcd/dhcpcd-run-hooks chain:
+# with it, dhcpcd ran the hook and the hook produced nothing at all.  The
+# publication happens first, in the first statements, with a file marker
+# that survives to the SD card (logcat is not available here:
+# /dev/socket/logdriv is root:log 0771 and dhcpcd's gid is 1014, so `log` from
+# this hook cannot connect).
 #
-# What the stock chain was worth: 20-dns.conf setpropped dhcp.<iface>.dns1..4,
-# which this script does itself, and 95-configured is exactly the stock
-# publisher whose "result=failed" on a dying client raced the framework (the
-# 18:36 boot read that six seconds into a fresh request).  Nothing else in it
-# matters: resolv.conf is not read by anything on this ROM (bionic reads
+# The stock chain is not needed: 20-dns.conf setprops dhcp.<iface>.dns1..4,
+# which this script does itself, and 95-configured is the stock publisher
+# whose "result=failed" on a dying client races the framework.  Nothing else
+# in it matters: resolv.conf is not read by anything on this ROM (bionic reads
 # net.dns*, which only uid 0 can set, and the root wrapper sets it from the
 # lease file written below).
 skip_hooks=configured
@@ -1141,9 +1128,9 @@ while [ "$i" -lt 40 ]; do
 		L "lease file: ip=$ip gw=$gw dns=$dns1"
 	fi
 
-	# The hook has never been seen to write its file on hardware (the
-	# 2026-10-14 boot again: "executing `/bin/dhcpcd-hook.sh'", no
-	# hook.ran, no lease.env), but dhcpcd always writes the DHCPACK itself.
+	# The hook has not been seen to write its file on hardware ("executing
+	# `/bin/dhcpcd-hook.sh'", but no hook.ran and no lease.env), but dhcpcd
+	# always writes the DHCPACK itself.
 	# Read it: yiaddr at offset 16, magic cookie 99.130.83.99 at 236, then
 	# the options (1 mask, 3 routers, 6 DNS, 51 lease time, 54 server id).
 	if [ -z "$ip" ] && [ -s "$LEASEPKT" ]; then
@@ -1176,9 +1163,8 @@ while [ "$i" -lt 40 ]; do
 	fi
 
 	# Fallback: ask the kernel what address dhcpcd put on the interface.  Only
-	# after 10 s: dhcpcd adds the address before it writes the lease, and
-	# the first boot with a working link (2026-10-14) published from here a
-	# second before the lease existed.  The
+	# after 10 s: dhcpcd adds the address before it writes the lease, so
+	# reading the interface any earlier publishes a half-configured link.  The
 	# Local table in /proc/net/fib_trie lists it on its own line followed by
 	# "/32 host LOCAL" (this is the 5.x format, not the older "IP/32" one),
 	# and /proc/net/route carries the default route's gateway and netmask.
@@ -1221,8 +1207,8 @@ while [ "$i" -lt 40 ]; do
 		fi
 		setprop dhcp.$IFACE.result ok
 		L "published: result=[$(getprop dhcp.$IFACE.result)] ip=[$(getprop dhcp.$IFACE.ipaddress)] gw=[$(getprop dhcp.$IFACE.gateway)] mask=[$(getprop dhcp.$IFACE.mask)] dns1=[$(getprop net.dns1)]"
-		# Does traffic flow?  (the card's logs said nothing either way
-		# on 2026-10-14: no app used the network before the lid closed)
+		# Does traffic flow?  Nothing else in the logs says so unless an app
+		# happens to use the network.
 		if [ -n "$gw" ] && [ -x /system/bin/ping ]; then
 			(
 				sleep 5
@@ -1543,8 +1529,8 @@ MEMGUARD_RC
 	sed -i 's/^ro\.debuggable=.*/ro.debuggable=0/' "$ROOT/default.prop"
 	sed -i 's/^ro\.allow\.mock\.location=.*/ro.allow.mock.location=0/' "$ROOT/default.prop"
 	sed -i 's/^persist\.service\.adb\.enable=.*/persist.service.adb.enable=0/' "$ROOT/default.prop"
-	# legacy/build-android.sh writes dalvik.vm.heapsize=16m into default.prop; a
-	# later duplicate did NOT take effect, so replace the line outright.  A
+	# default.prop may already carry a smaller dalvik.vm.heapsize; a later
+	# duplicate line does NOT take effect, so replace the line outright.  A
 	# large heap keeps zygote from GC-ing - and therefore allocating the
 	# mark stack - during its framework bootstrap.
 	sed -i 's/^dalvik\.vm\.heapsize=.*/dalvik.vm.heapsize=64m/' "$ROOT/default.prop"
@@ -1574,17 +1560,12 @@ cat > "$ROOT/init" <<'INIT'
 #!/bin/sh
 # @@ANDROID_NAME@@ on Nintendo 3DS - bring-up init (PID 1)
 #
-# The 3DS has no serial port, so this script has three jobs:
-#   1. mount the SD card and log everything to it (when writable),
-#   2. exercise the display/input paths and print a full inventory,
-#   3. print the log on the TOP screen - PID 1's stdout is the fbcon console
+# The 3DS has no serial port, so this script:
+#   1. mounts the SD card and logs everything to it (when writable),
+#   2. prepares /system, /data and /dev and starts Android's init as a child,
+#   3. prints its log on the TOP screen - PID 1's stdout is the fbcon console
 #      there (diagnostic boots additionally page it onto the BOTTOM screen
-#      with fbsay) - and then hand over an
-#      interactive shell on the TOP screen.  The touchscreen acts as a
-#      keyboard (the kernel's 3dstsc-touch driver has a virtual keyboard:
-#      8 rows of keys, each row 36px tall, top-left of the bottom screen),
-#      so commands *can* be typed - just blind, because the keyboard is drawn
-#      by the old bottom-screen driver, not by the one this port uses.
+#      with fbsay) - and, if Android cannot start, leaves a shell there.
 
 PATH=/bin:/sbin
 export PATH
@@ -1616,13 +1597,13 @@ FBTXT=/tmp/boot.txt
 MINDIAG="${MINDIAG:-}"
 [ -f /etc/3ds-minimal-diagnostics ] && MINDIAG=1
 
-# DIAG: the full bring-up diagnostics.  They are OFF by default now that the
-# port is usable: tsdump flushes every touch event to the FAT card, tsmark
-# repaints the top screen on every event, appwatch/lateprobe fork constantly and
-# the firstframe probe SIGQUITs every app thread.  On one 804 MHz core that is
-# exactly the "laggy" the user sees.  Enable per boot by dropping a file named
-# "diag" into CYANO3DS/ on the SD card (or ship /etc/3ds-diag in a
-# diagnostic initramfs build).  kmsgdump/logdump/the flusher stay on regardless.
+# DIAG: the full bring-up diagnostics.  They are OFF by default: tsdump flushes
+# every touch event to the FAT card, tsmark repaints the top screen on every
+# event, appwatch/lateprobe fork constantly and the firstframe probe SIGQUITs
+# every app thread.  On one 804 MHz core that makes the UI visibly laggy.
+# Enable per boot by dropping a file named "diag" into CYANO3DS/ on the SD card
+# (or ship /etc/3ds-diag in a diagnostic initramfs build).
+# kmsgdump/logdump/the flusher stay on regardless.
 DIAG=""
 [ -f /etc/3ds-diag ] && DIAG=1
 
@@ -1669,11 +1650,11 @@ chmod 0666 /dev/urandom /dev/random /dev/tty0 /dev/fb0 /dev/fb1 2>/dev/null
 # freezes hard with no hung-task and no softlockup report (i.e. a spin with
 # IRQs off, which no in-kernel detector can see), so /bin/heartbeat prints one
 # short line to the console every few seconds.  It touches nothing on the SD.
-# It used to run at SCHED_FIFO priority 99 via /bin/rt, but that made the
-# kernel itself print "sched: RT throttling activated" as the very last log
-# line before the freeze and may have perturbed the very thing we are
-# measuring.  A normal-priority process with a -20 nice value is enough to
-# survive a userspace busy-loop on the single CPU without ever throttling.
+# It does not run at SCHED_FIFO priority 99 via /bin/rt: that makes the kernel
+# itself print "sched: RT throttling activated" as the very last log line
+# before a freeze and may perturb the very thing being measured.  A
+# normal-priority process with a -20 nice value is enough to survive a
+# userspace busy-loop on the single CPU without ever throttling.
 if [ -n "$DIAG" ] && [ -x /bin/heartbeat ]; then
 	if [ -x /bin/nice ]; then
 		nice -n -20 heartbeat &
@@ -1726,7 +1707,7 @@ for d in $PARTDEVS $WHOLEDEVS; do
 		# vold's fmask=0702: that takes every right from the *owner*, and the
 		# owner is system_server's uid, so it could not read the card APKs
 		# bound into /system/app ("zipro: Unable to open zip
-		# '/system/app/AngryBirds.apk': Permission denied", 2026-10-14).
+		# '/system/app/<name>.apk': Permission denied").
 		[ "$fs" = vfat ] && o="-o uid=1000,gid=1015,fmask=0002,dmask=0002"
 		if mount -t "$fs" $o "$d" /mnt/sd 2>/dev/null; then
 			SDDEV="$d"
@@ -2151,9 +2132,9 @@ if [ -x /bin/android-init ] && [ -f /init.rc ] && [ -n "$SDDEV" ]; then
 				#
 				# services.jar is on the Dalvik boot classpath, so replacing it
 				# invalidates the dependency signature recorded in every
-				# already-optimized cache.  The previous session's overlay
-				# boot-looped system_server because installd's `dexopt` SIGSEGVs
-				# (status=0x000b) on the stale app caches.  The root pre-dexopt
+				# already-optimized cache, and with stale app caches installd's
+				# `dexopt` SIGSEGVs (status=0x000b) and system_server
+				# boot-loops.  The root pre-dexopt
 				# below does not SIGSEGV, so delete the app caches here and let
 				# it rebuild them against the new signature.
 				if [ -f /mnt/sd/CYANO3DS/services.jar ]; then
@@ -2344,11 +2325,11 @@ if [ -x /bin/android-init ] && [ -f /init.rc ] && [ -n "$SDDEV" ]; then
 		# Screen timeout.  The keep-awake PortHelper is not in this
 		# initramfs (it needs java + smali at build time) and "stay on while
 		# plugged in" does nothing on battery (the real MCU battery reports
-		# Discharging), so the saved settings' screen_off_timeout decides:
-		# the card's data tar had CM7's default 60000, and 60 s after the
-		# last touch PowerManagerService turned the panels off ("power: ***
-		# set_screen_state 0", 2026-10-14) -- with the POWER button being a
-		# clean shutdown here, nothing could bring them back.  -1 is "never"
+		# Discharging), so the saved settings' screen_off_timeout decides.
+		# CM7's default is 60000: 60 s after the last touch
+		# PowerManagerService turns the panels off ("power: ***
+		# set_screen_state 0"), and with the POWER button being a clean
+		# shutdown here, nothing can bring them back.  -1 is "never"
 		# to Gingerbread's PowerManagerService (mScreenOffDelay =
 		# Integer.MAX_VALUE).  A value in ms in CYANO3DS/screen-timeout
 		# (e.g. 120000) is used instead.
@@ -2534,7 +2515,7 @@ DF
 echo "lid-sleep-hook: saving /data before sleep" > /dev/kmsg 2>/dev/null
 # The logs reach the card from RAM every 10 s, and suspend freezes the
 # copier: put them there now, so a sleep that never comes back still leaves
-# its start on the card (2026-10-14: the last copy predated the lid close).
+# its start on the card.
 for f in kmsg.log android-log.txt; do
 	cp /mnt/probe/$f /mnt/sd/CYANO3DS/$f 2>/dev/null
 done
@@ -2581,9 +2562,9 @@ LH
 		say "lid sleep: armed 15 s after Android boot completes"
 		# /bin/shutdown: clean power-off for a short power-button press.
 		#
-		# The native `powerkey` used to call reboot(RB_POWER_OFF) directly, which
-		# is a hard cut: apps were never told to save and no process was stopped.
-		# This does the orderly version: broadcast ACTION_SHUTDOWN, stop the
+		# Calling reboot(RB_POWER_OFF) directly would be a hard cut: apps are
+		# never told to save and no process is stopped.  This does the orderly
+		# version: broadcast ACTION_SHUTDOWN, stop the
 		# Android processes, flush the persistent /data subset, sync, then power
 		# off.  The 3DS still force-powers-off on a long hold, so a wedged
 		# shutdown can never brick the console.
@@ -2856,13 +2837,14 @@ GBCXML
 		# ------------------------------------------------------------------
 		# Give Android a real /dev: a tmpfs that we populate.
 		#
-		# Android's init mknod()s /dev/__kmsg__ and /dev/__null__ itself and logs
-		# through the former; devtmpfs refuses userspace-created device nodes, so
-		# that mknod failed, klog_fd stayed -1 and *every* message init produced
-		# was thrown away - which is why no boot so far showed a single line of
-		# Android's own logging.  A tmpfs allows mknod, so we mount one and
-		# populate the nodes Android expects; init inherits it because its own
-		# tmpfs mount is disabled by the tmpfx patch (legacy/build-android.sh).
+		# Android's init mknod()s /dev/__kmsg__ and /dev/__null__
+		# itself and logs through the former; devtmpfs refuses
+		# userspace-created device nodes, so on devtmpfs that mknod
+		# fails, klog_fd stays -1 and *every* message init produces is
+		# thrown away.  A tmpfs allows
+		# mknod, so we mount one and populate the nodes Android
+		# expects; init inherits it because its own tmpfs mount is
+		# disabled by the tmpfx patch (build-cm7-source.sh).
 		# ------------------------------------------------------------------
 		say "--- preparing /dev (tmpfs, populated by hand) ---"
 		mount -t tmpfs none /dev 2>/dev/null || say "  tmpfs mount on /dev FAILED"
@@ -2941,8 +2923,8 @@ GBCXML
 					| sed 's/^/devmode: /' >> "$DEVLOG"
 				grep -E " /dev " /proc/mounts 2>/dev/null \
 					| sed 's/^/devmode-mount: /' >> "$DEVLOG"
-				# Only log the /dev state occasionally: this loop used to write
-				# to the SD every 2 s and the freeze looks storage-related.
+				# Only log the /dev state occasionally: frequent SD writes from
+				# here have coincided with storage-related freezes.
 				sleep 30
 			done
 		) &
@@ -2978,7 +2960,7 @@ GBCXML
 		# nodes world-accessible just like the framebuffers and inputs.
 		chmod 0666 /dev/snd/* 2>/dev/null
 		say "  /dev/snd: $(ls /dev/snd 2>/dev/null | tr '\n' ' ')"
-		# M4 bring-up: dump raw events from the dedicated touchscreen node
+		# Diagnostic boots: dump raw events from the dedicated touchscreen node
 		# ("Nintendo 3DS touchscreen", classes=0x4 in EventHub).  Flushed per
 		# event so the log survives even if the system later freezes.  tsdump
 		# scans /dev/input itself, so it does not depend on the evdev minor
@@ -3003,9 +2985,8 @@ GBCXML
 		# measures on this unit (see the calibrate step below); it is fed to
 		# the driver's module parameters on every boot.  No file = the
 		# driver's defaults.  (No extension on purpose: boot rotates every
-		# *.log/*.txt/*.bin in CYANO3DS/ away.)  (The orientation is fixed: the old
-		# /proc/ctr_touch_map and /proc/ctr_touch_cal belonged to the
-		# previous driver and no longer exist.)
+		# *.log/*.txt/*.bin in CYANO3DS/ away.)  The orientation is fixed in
+		# the driver.
 		TP=/sys/module/touch/parameters
 		if [ -f "$LOGDIR/touch-cal" ] && [ -e $TP/cal_x0_raw ]; then
 			read CX0 CX1 CY0 CY1 CXX < "$LOGDIR/touch-cal" 2>/dev/null
@@ -3040,8 +3021,8 @@ GBCXML
 			) >/dev/null 2>&1 &
 			say "flip-rate logger armed -> flips.log (every 15s)"
 		fi
-		# M4 diagnostic: once the launcher should be up, dump the window and
-		# activity state so we can see whether the launcher / battery dialog
+		# Diagnostic boots: once the launcher should be up, dump the window and
+		# activity state to see whether the launcher / battery dialog
 		# windows are visible, touchable and focused, and why a dispatched
 		# touch misses them.  Each call is a binder round trip to a possibly
 		# wedged service, so they run in the background after the boot settles.
@@ -3055,23 +3036,11 @@ GBCXML
 				# (SCREEN_ON_BIT / SCREEN_BRIGHT_BIT), which gates wake-key and
 				# touch delivery.
 				timeout 25 /system/bin/dumpsys power          > "$LOGDIR/dumpsys-power.txt"   2>&1
-				# Status bar disable flags: mDisabled should have bit 0
-				# (DISABLE_EXPAND) set by the helper.
+				# Status bar disable flags (mDisabled).
 				timeout 25 /system/bin/dumpsys statusbar      > "$LOGDIR/dumpsys-statusbar.txt" 2>&1
 			) &
 			say "dumpsys window/activity/power probe armed (+75s)"
 		fi
-		# The old CLOSE_SYSTEM_DIALOGS broadcast (and the DISABLE_EXPAND helper
-		# and the driver's top-strip touch drop) are gone: touch works now, so
-		# the status bar / notification shade is allowed to work normally.
-		# Only the keep-awake userActivity remains in the helper.
-		# The Dev Tools app (com.android.development) is installed but
-		# deliberately *not* auto-launched any more: with the input fixes in
-		# place the normal launcher comes up on its own, and the user opens
-		# whichever app they want.
-		# Android's notification shade is a touch-modal, focusable
-		# TYPE_STATUS_BAR_PANEL window: while it is visible it swallows every
-		# pointer event and keeps key focus, so a stray status-bar touch made
 		# PortHelper: keep the screen awake (IPowerManager.userActivity every 5 s)
 		# and dismiss the keyguard.  Without it PowerManagerService's screen-off
 		# timer fires during music playback / games and WindowManagerService then
@@ -3102,20 +3071,20 @@ GBCXML
 		#
 		# The screen_off_timeout written before system_server starts (above)
 		# needs a settings.db, which the very first boot does not have yet: the
-		# settings provider creates it with CM7's 60 s default, 60 s after the
-		# last touch the panels went black with the CRT-off animation, and
-		# nothing wakes them (POWER is a clean shutdown here), 2026-10-19.  So
-		# once the power service is up, write the timeout into the fresh
+		# settings provider creates it with CM7's 60 s default, so 60 s after
+		# the last touch the panels go black with the CRT-off animation and
+		# nothing wakes them (POWER is a clean shutdown here).  So once the
+		# power service is up, write the timeout into the fresh
 		# settings.db, then poke PowerManagerService: `svc power stayon true`
 		# makes it write STAY_ON_WHILE_PLUGGED_IN through the settings
 		# provider, which reloads every system setting in the service,
 		# including the screen_off_timeout written behind its back.
 		# On the 3DS's discharging battery the stay-on value itself keeps
 		# nothing on.
-		# `svc` NPEs if it runs before system_server has published "power" (it
-		# did on every CM7 boot: the old fixed wait was too early), so wait for
-		# the service itself, and retry while svc exits on its own: when it
-		# works it never exits (CM6: ppid 1, 5.7 MB private, whole session).
+		# `svc` NPEs if it runs before system_server has published "power" (a
+		# fixed wait is too early on CM7), so wait for the service itself, and
+		# retry while svc exits on its own: when it works it never exits (CM6:
+		# ppid 1, 5.7 MB private, for the whole boot).
 		if [ -x /system/bin/svc ]; then
 			(
 				BCP=/system/framework/core.jar:/system/framework/ext.jar:/system/framework/framework.jar:/system/framework/android.policy.jar:/system/framework/services.jar
@@ -3230,8 +3199,8 @@ GBCXML
 		# zaps service stderr to /dev/null, so run it here directly with
 		# stderr captured: a failure prints its reason, a success blocks in
 		# binder_loop (which is itself the answer).
-		# The standalone servicemanager diagnostic is off by default now that
-		# Android's init starts the real one; it left a stale context manager
+		# The standalone servicemanager diagnostic is off by default: Android's
+		# init starts the real one, and this one leaves a stale context manager
 		# around.  Set SM_DIAG=1 in the init to re-enable it.
 		if [ -n "${SM_DIAG:-}" ] && [ -x /system/bin/servicemanager ]; then
 			say ""
@@ -3279,17 +3248,14 @@ GBCXML
 					sleep 2
 				done
 				# Keep the periodic snapshot cheap: the app-start race is handled
-				# by /bin/appwatch, which writes straight to the SD card.  The
-				# heavy sysrq-t/Java probes here were slowing the boot so much
-				# that it never reached the app at all.
+				# by /bin/appwatch, which writes straight to the SD card.  Heavy
+				# sysrq-t/Java probes here slow the boot so much that it never
+				# reaches the app at all.
 				/bin/lateprobe sf quick
-				# The SIGQUIT Dalvik thread dumps that used to run here every
-				# ~10 s are gone: they were for the system_server deadlock, and
-				# each one stops *every* app thread (including the input test
-				# app) for up to a second -- a large part of the "glitchy /
-				# delayed touches" symptom.  The kernel-side detectors (hung
-				# task, softlockup, sysrq-t) are still there if a hang ever
-				# needs naming.
+				# No periodic SIGQUIT Dalvik thread dumps: each one stops
+				# *every* app thread for up to a second, which shows up as
+				# glitchy, delayed touches.  The kernel-side detectors (hung
+				# task, softlockup, sysrq-t) are there if a hang needs naming.
 				i=0
 				while [ $i -lt 600 ]; do
 					/bin/lateprobe q$i quick
@@ -3298,19 +3264,16 @@ GBCXML
 				done
 			) >> /mnt/probe/late-probe.log 2>&1 &
 			if [ -x /bin/appwatch ]; then
-				# Deliberately NOT at nice -20: on a single CPU the
-				# /proc scan that fires the moment an app forks could starve
-				# system_server/zygote, which looks exactly like the freeze
-				# we are chasing.  Its steady state is cheap (one
-				# /proc/loadavg read and a sleep).
+				# Deliberately NOT at nice -20: on a single CPU
+				# the /proc scan that fires the moment an app
+				# forks could starve system_server/zygote,
+				# which looks exactly like a freeze.  Its
+				# steady state is cheap (one /proc/loadavg read
+				# and a sleep).
 				/bin/appwatch >/dev/null 2>&1 &
 			fi
 			say "late diagnostics armed (tmpfs-buffered, stack probe on app start)"
 		fi
-		# (The standalone app_process diagnostic was removed: it runs zygote
-		# without init's socket setup, so it always failed with
-		# "ANDROID_SOCKET_zygote unset" and drowned out the real zygote's log.
-		# Read android-log.txt for zygote/system_server instead.)
 		# --- bring-up: pre-dexopt system packages as root ----------------
 		# installd's `dexopt --zip` dies with SIGSEGV (status=0x000b) and
 		# leaves a 0xff DexOptHeader, so system_server cannot load the system
@@ -3350,7 +3313,7 @@ GBCXML
 				i=$((i+1))
 				base=$(basename "$src")
 				# Live progress on the BOTTOM screen: the pre-dexopt is the
-				# longest single phase (~100 s) and used to look like a hang.
+				# longest single phase (~100 s) and looks like a hang otherwise.
 				say "  [$i/$total] $base"
 				case "$src" in
 					/system/framework/*) cache="/data/dalvik-cache/system@framework@$base@classes.dex" ;;
@@ -3650,9 +3613,8 @@ fi
 
 # --------------------------------------------------------------------------
 say ""
-say "staying in bring-up mode: starting an interactive shell on this (top)"
-say "screen.  the touchscreen is a keyboard (blind: the on-screen keyboard"
-say "is drawn by the old bottom-screen driver).  try: dmesg | tail -30"
+say "starting an interactive shell on this (top) screen."
+say "try: dmesg | tail -30"
 
 busybox stty echo isig < /dev/console 2>/dev/null
 while true; do
@@ -3666,8 +3628,7 @@ chmod 755 "$ROOT/init"
 # The /init text is a quoted heredoc, so the boot-time shell variables are kept
 # literal at build time.  The userspace version and the /data restore archive
 # name are baked in as @@ANDROID_NAME@@ / @@DATATAR@@ placeholders and always
-# rewritten for the selected flavor (the froyo flavor still yields
-# "Android 2.2 (Froyo)" / "data-froyo.tar").
+# rewritten for the selected flavor.
 sed -i \
 	-e "s/@@ANDROID_NAME@@/$ANDROID_NAME/g" \
 	-e "s/@@DATATAR@@/$DATATAR/g" \
@@ -3685,7 +3646,7 @@ fi
 say "packing"
 # ---------------------------------------------------------------------------
 # The initramfs is the rootfs, so every byte stays in RAM for the whole
-# session (~90 KB per unstripped static helper on a 128 MB console).
+# boot (~90 KB per unstripped static helper on a 128 MB console).
 for f in "$ROOT"/bin/*; do
 	[ -f "$f" ] && [ ! -L "$f" ] || continue
 	file "$f" | grep -q 'ELF.*not stripped' || continue

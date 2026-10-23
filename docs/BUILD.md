@@ -31,9 +31,9 @@ LOCAL=~/.cache/cm7-rootless   # Ubuntu 12.04 chroot + tools (step 4); about 4 GB
 packages below with `apt`. The CM7 chroot runs under `proot` (fake root) and
 its first debootstrap stage under `fakeroot`, so `out/` and the source tree
 stay owned by your user. `port/scripts/cm7-rootless.sh` does the whole CM7
-flow, including `run 'cmd'` for a command in the chroot. The old sudo-based
-`cr-run.sh` is removed, and `setup-chroot.sh` is a thin wrapper around it. After a WSL restart, nothing
-needs re-mounting: the bind mounts are made per command.
+flow, including `run 'cmd'` for a command in the chroot; `setup-chroot.sh` is
+a thin wrapper around it. Nothing needs re-mounting after a reboot: the bind
+mounts are made per command.
 
 Run `bash port/scripts/check-deps.sh <stage>` before a stage to see every
 missing tool with its apt package name. The stage names are `kernel`,
@@ -70,13 +70,12 @@ sudo apt-get install -y --no-install-recommends \
   venv under `$SRCDIR/.venv-firmtool`. The package is not on PyPI under that
   name, so there is nothing to install by hand. Override the source with
   `FIRMTOOL_REPO=`.
-- `python3-venv` is required for that venv. The old `--break-system-packages`
-  install is gone.
+- `python3-venv` is required for that venv.
 - `default-jre-headless` + `zip` are for `PortHelper` (step 5): without Java
   the initramfs still builds, but the keep-awake helper is skipped and the
   screen will time out on device.
 
-Two files are fetched once into the checkout (they are not in git):
+Three things are set up once in the checkout (none of them is in git):
 
 ```bash
 cd "$REPO"
@@ -181,8 +180,8 @@ bash port/scripts/cm7-rootless.sh run 'cmd'        # any command inside the 12.0
 
 - `port` and `build` are idempotent: re-run `port` after pulling any port
   update, or the build may pick up a stale device tree.
-- Run `build` in the foreground of a long-running shell. Background builds
-  may be killed when the launching session exits on some systems.
+- Run `build` in the foreground of a long-running shell. On some systems a
+  background build is killed when its terminal closes.
 - The target is `droidcore` with `lunch cyanogen_nintendo3ds-userdebug`
   (see [CM7.md](CM7.md)). Without the `lunch` the build produces the generic
   product and `package` cannot find `out/target/product/nintendo3ds/`.
@@ -194,7 +193,7 @@ bash port/scripts/cm7-rootless.sh run 'cmd'        # any command inside the 12.0
 - `JOBS` (repo sync parallelism, default 3) and `BUILD_J` (make, default 2)
   are the knobs. GitHub rate-limits high `JOBS` values.
 - The repo sync runs on the host with the current `repo` launcher (Python 3).
-  The gb-release-7.2 manifest is a plain manifest and does not need the old
+  The gb-release-7.2 manifest is a plain manifest and does not need the
   Python 2 `repo` v2.7, and the chroot has no `repo` tool.
 
 `build-cm7-source.sh` always writes into `<repo>/out` (that is also where
@@ -215,7 +214,7 @@ child (not PID 1), mounts `/system` from the image, seeds `/data`, installs
 APKs dropped in `CYANO3DS/` on the card, and keeps a log on the SD card. It
 asserts the 8 MiB initramfs size limit that `firm_linux_loader` enforces.
 
-Wi-Fi firmware is optional here: without the blobs from step 6 the script
+Wi-Fi firmware is optional here: without the blobs from step 7 the script
 prints a warning and the build still boots, just without Wi-Fi.
 
 ## 6. Assemble the SD card
@@ -273,10 +272,7 @@ The details, including which NWM revision is needed, are in
 | Kernel checkout on `/mnt/c` fails with odd filename errors | NTFS limitation — move the checkout and `$KDIR` onto a Linux filesystem (step 0). |
 | `debootstrap`: `Release signed by unknown key (key id 40976EAF437D05B5)` | The host's `ubuntu-archive-keyring` no longer trusts the 2012-era precise signing key. Re-add the old key to `/usr/share/keyrings/ubuntu-archive-keyring.gpg` (or use `debootstrap --no-check-gpg`). |
 | `repo: error: Python 2 is no longer supported` | The sync must run on the host with Python 3 (`cm7-rootless.sh sync`). Do not run `repo` inside the Python 2 chroot. |
-| `dpkg: error: unknown option --add-architecture` | Not used any more: precise's dpkg 1.16 predates it and the 32-bit packages install without it. |
-| `No rule to make target external/svox/…` | The CM svox fork is gone from GitHub. Run `port/scripts/stage-svox.sh` after the sync (and after `cleanup-cm7-tree.sh`, which no longer deletes it). |
-| `"common_full.mk" does not exist` / `common.mk: No such file` | `cleanup-cm7-tree.sh` used to delete the `common_*.mk`/`themes*.mk` files the product inherits. Fixed — they are kept now. |
-| `ld: cannot find -lstdc++` / `-lz` (32-bit host tools) | precise has no 32-bit libstdc++/zlib dev packages. The `chroot` stage of `cm7-rootless.sh` creates the `.so` symlinks. |
-| `sh: gperf: not found` | `gperf` is in the chroot's package list now. |
-| `PermissionError: …/out/.../build.prop` | Not expected any more: the build runs under `proot -0`, which keeps `out/` owned by your user. If you see it, the tree was created by an older root build; `sudo chown -R $USER $CM7_DIR/out` once. |
+| `No rule to make target external/svox/…` | The CM svox fork is not on GitHub any more. Run `port/scripts/stage-svox.sh` after the sync (and after `cleanup-cm7-tree.sh`). |
+| `ld: cannot find -lstdc++` / `-lz` (32-bit host tools) | precise has no 32-bit libstdc++/zlib dev packages. The `chroot` stage of `cm7-rootless.sh` creates the `.so` symlinks; re-run it. |
+| `PermissionError: …/out/.../build.prop` | The tree's `out/` was created by a root build. `sudo chown -R $USER $CM7_DIR/out` once; the `proot -0` build keeps it owned by your user from then on. |
 | `Don't have a product spec for: 'cyanogen_nintendo3ds'` / builds `generic` | No `lunch` was run. Use `lunch cyanogen_nintendo3ds-userdebug` before `make droidcore`. |

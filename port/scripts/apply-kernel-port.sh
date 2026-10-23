@@ -193,8 +193,8 @@ dtsi.write_text(s)
 print("    nintendo3ds.dtsi: bottom-screen LCD node in place (after the top-screen fb)")
 
 # Console: keep exactly what linux-3ds uses - top screen, rotate:1 because that
-# panel is scanned portrait as well.  No fbcon=map is needed now that the
-# console framebuffer is the first one registered; fbcon=map:1 with a missing
+# panel is scanned portrait as well.  No fbcon=map is needed: the console
+# framebuffer is the first one registered; fbcon=map:1 with a missing
 # fb1 would leave the kernel with no console at all.
 for name in ("nintendo3ds_ctr.dts", "nintendo3ds_ktr.dts"):
     p = kd / "arch/arm/boot/dts" / name
@@ -215,10 +215,10 @@ for name in ("nintendo3ds_ctr.dts", "nintendo3ds_ktr.dts"):
     # single CPU makes the slot unambiguous again; the 3DS's extra cores can
     # come back once the userspace is rebuilt to use the hardware TLS
     # register (TPIDRURO) instead of the legacy slot.
-    # The audio bring-up is done; ctr_lcd_fb.debug=1 (the top-screen liveness
-    # marker + the softirq stall watchdog that dumps stacks via the slow ARM9
-    # capture path) is removed again.  It was firing on busy native games and
-    # could stall the UI.
+    # No ctr_lcd_fb.debug=1 (the top-screen liveness marker + the softirq
+    # stall watchdog that dumps stacks via the slow ARM9 capture path): it
+    # fires on busy native games and can stall the UI.  The older command
+    # lines in `known` are replaced.
     want = "maxcpus=1 fbcon=rotate:1 fbcon=font:VGA8x8 consoleblank=0"
     known = [
         "maxcpus=1 fbcon=rotate:1 fbcon=font:VGA8x8 consoleblank=0 ctr_lcd_fb.debug=1",
@@ -350,12 +350,8 @@ python3 "$PORT/scripts/fix-virtblk-loop-guard.py" "$KD"
 # CFG11).  Without it the TSC ADC never runs and the FIFO reads 0xFFFF.
 python3 "$PORT/scripts/fix-tsc-speaker-clock.py" "$KD"
 
-# The whole touchscreen driver is now Octoblimp's, vendored verbatim in
-# port/kernel/.  This port used to patch the inherited linux-3ds touch.c into a
-# dedicated evdev touchscreen and layer an eight-way mapping, an affine
-# calibration and a FIFO median + touch-slop filter on top.  It still felt
-# wrong at the edges, while
-# Octoblimp's driver on the identical panel feels right.  That driver medians
+# The touchscreen driver is Octoblimp's, vendored verbatim in port/kernel/
+# in place of linux-3ds' touch.c.  It medians
 # the FIFO's five samples, anchors a contact to its DOWN position, reports the
 # newest sample at 60 Hz, registers the panel as INPUT_PROP_DIRECT, and moves
 # the circle pad to its own trackball input device.  Keep the vendored file
@@ -365,9 +361,9 @@ install -m 644 "$PORT/kernel/drivers/platform/nintendo3ds/tsc/touch.c" \
 	"$KD/drivers/platform/nintendo3ds/tsc/touch.c"
 
 # The Octoblimp driver binds to its own compatible string and reports final
-# 320x240 coordinates, so point the DT node at it.  (The old node advertised
-# touchscreen-size 4096 plus swap/invert properties, none of which either
-# driver ever parsed.)
+# 320x240 coordinates, so point the DT node at it.  (linux-3ds' node
+# advertises touchscreen-size 4096 plus swap/invert properties, which neither
+# driver parses.)
 python3 - "$KD" <<'PY'
 import pathlib, sys
 kd = pathlib.Path(sys.argv[1])
@@ -401,12 +397,6 @@ python3 "$PORT/scripts/fix-buttons.py" "$KD"
 # power press).  That hides the Home button from Android entirely.  Split the
 # node so home + wireless get their own evdev.
 python3 "$PORT/scripts/fix-mcu-home-button.py" "$KD"
-
-# The legacy status bar TrackingView is touch-modal over the top ~19 px, so a
-# touch there expands the shade and the shade then swallows input.  This port
-# does not drop touches that start in that strip; that is DISABLED now because
-# touch works and the status bar should be usable (the DISABLE_EXPAND helper
-# and the CLOSE_SYSTEM_DIALOGS broadcast are gone too).
 
 # New 3DS ZL/ZR buttons (not in HID_PAD; on I2C 2:0x54)
 install -m 644 "$PORT/kernel/drivers/platform/nintendo3ds/ctr_extrapad.c" \
@@ -461,10 +451,9 @@ s = dtsi.read_text()
 extrapad_bus = re.compile(r'&i2c\d+ \{\n\textrapad@2a \{')
 if "extrapad@2a" in s:
     # The chip is on I2C bus 2 = 0x10148000 (the IR + gyro bus), NOT
-    # 0x10144000 (the MCU bus).  An earlier version of this script attached
-    # it to &i2c2; on that bus address 0x2A never ACKs and every read returns
-    # FF FF (ctr_i2c does not surface a NACK), so ZL/ZR never worked.
-    # Migrate such a tree in place.
+    # 0x10144000 (the MCU bus).  On &i2c2 address 0x2A never ACKs and every
+    # read returns FF FF (ctr_i2c does not surface a NACK), so ZL/ZR do not
+    # work.  Move a node found on another bus to &i2c3 in place.
     s2 = extrapad_bus.sub('&i2c3 {\n\textrapad@2a {', s)
     s2 = s2.replace(
         "/* New 3DS ZL/ZR (and C-stick): same I2C bus as the MCU.",
@@ -600,14 +589,13 @@ python3 "$PORT/scripts/add-vfat-android-volume-id.py" "$KD"
 say "10/10  kernel: Nintendo 3DS WiFi (Octoblimp staging ath6k + AR6014/NWM)"
 # ---------------------------------------------------------------------------
 # The 3DS WiFi is an Atheros AR6014G on a *second* SD host controller
-# (0x10122000, the "nwm" node).  The Cyano3DS port used to drive it with mainline
-# cfg80211 ath6kl, patched piece by piece for the AR6002 "hw2" family and
-# Nintendo's NWM firmware; that never reached a working station.  This port now
-# installs the Octoblimp/Android3DS stack instead: the pre-mainline staging
-# ath6k driver, ported to cfg80211 + WEXT and taught to boot the AR6014 from
-# Nintendo's four NWM blobs, together with Octoblimp's ctr_sdhc.c SDIO host
-# changes.  The driver source and the AR6014/NWM patch series are vendored in
-# port/kernel/ (see fix-wifi-octoblimp.py).  See docs/WIFI.md.
+# (0x10122000, the "nwm" node).  Mainline ath6kl does not support its AR6002
+# "hw2" family, so this installs the Octoblimp/Android3DS stack: the
+# pre-mainline staging ath6k driver, ported to cfg80211 + WEXT and taught to
+# boot the AR6014 from Nintendo's four NWM blobs, together with Octoblimp's
+# ctr_sdhc.c SDIO host changes.  fix-wifi-octoblimp.py fetches the driver at a
+# pinned commit and applies port/kernel/patches/ath6k_legacy-cyano3ds.patch.
+# See docs/WIFI.md.
 python3 "$PORT/scripts/fix-wifi-octoblimp.py" "$KD"
 
 say "done - now run build-kernel.sh"

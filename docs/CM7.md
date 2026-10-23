@@ -72,8 +72,8 @@ are guarded by `ifneq ($(TARGET_NO_KERNEL),true)` in `build/core/Makefile`,
 and the 3DS `BoardConfig.mk` sets `TARGET_NO_KERNEL := true` (the kernel is
 the linux-3ds zImage, not an Android boot.img).  `droidcore` builds
 systemimage + ramdisk + userdata without the OTA packaging that a no-kernel
-device cannot use.  Run the build in the foreground of a long-running shell —
-background builds may be killed when the launching session exits on some systems.
+device cannot use.  Run the build in the foreground of a long-running shell;
+on some systems a background build is killed when its terminal closes.
 
 See [BUILD.md](BUILD.md) for the host setup.
 
@@ -97,15 +97,15 @@ nothing bootable:
    no lunch builds the default `generic` product, and `build-cm7-source.sh`
    then can't find `out/target/product/nintendo3ds/`.
 6. **`external/svox` must be staged after `cleanup-cm7-tree.sh`.** The CM fork
-   is gone from GitHub; `stage-svox.sh` puts AOSP's `android-2.3.7_r1` there.
-   (The cleanup script deliberately leaves `external/svox` alone now.)
+   is no longer on GitHub; `stage-svox.sh` puts AOSP's `android-2.3.7_r1` there.
+   (The cleanup script leaves `external/svox` alone.)
 7. **The 32-bit host tools need hand-made `.so` symlinks.** precise has no
    32-bit libstdc++/zlib *dev* packages, so `aidl`/`aapt` fail to link until
    the `chroot` stage points `libstdc++.so`/`libz.so` at the 32-bit runtimes.
 8. **`gperf` is required** (libwebcore's `CSSValueKeywords.h` generation) and is
    in the chroot's package list.
 9. **The build runs under `proot -0`, so `out/` stays owned by your user.**
-   Nothing needs a `chown` any more.
+   Nothing needs a `chown`.
 
 ## Kernel support used by CM7
 
@@ -194,12 +194,10 @@ refreshes user activity, which keeps the screen on. A card file
   camera, Bluetooth, CMStats/updates, `rild`). They should fail gracefully;
   anything that crash-loops can be removed from `/system/app`.
 
-## Current status
+## Status
 
 - Boots to ADWLauncher + SystemUI; Settings, Contacts and Calculator run.
-- Touch, buttons, audio and the battery indicator work.
-- Lid sleep, the microphone and the cameras are new (2026-10-14) and need
-  checking on hardware: read `CYANO3DS/selftest.txt` after a boot.
-- Wi-Fi is being brought up (driver and firmware load; joining a network is
-  the remaining piece).
+- Touch, buttons, audio, the microphone, the battery indicator, Wi-Fi, lid
+  sleep and the cameras work. `CYANO3DS/selftest.txt`, written after each
+  boot, checks most of them.
 - No GPU, no second Android screen — see [SCOPE.md](SCOPE.md).

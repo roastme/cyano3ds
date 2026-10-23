@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
-"""Wi-Fi (2026-10-14): firmware in the initramfs, key format pinned.
+"""Wi-Fi: firmware in the initramfs, key format pinned, DHCP hand-off.
 
-The 2026-10-13 card had no NWM firmware in its initramfs ("request firmware
-failed ath6k/AR6002/nwm/stub_data.bin"), so the AR6014 never ran.  And the
-driver swept four WMI_ADD_CIPHER_KEY formats one per association, starting
-with two that lose the AP ~1.5 s after the keys go in; only row 2,
-"dsi-45-u0" (the 45-byte form, PTK usage 0 / GTK usage 1, as the DSi library
-dsiwifi sends it), kept the link up and delivered traffic on hardware
-(2026-10-04 log).  Row 2 is now the default.
+Without the NWM firmware in the initramfs ("request firmware failed
+ath6k/AR6002/nwm/stub_data.bin") the AR6014 never runs.  Of the
+WMI_ADD_CIPHER_KEY formats the driver knows, only row 2, "dsi-45-u0" (the
+45-byte form, PTK usage 0 / GTK usage 1, as the DSi library dsiwifi sends
+it), keeps the link up and delivers traffic on hardware; the others lose the
+AP ~1.5 s after the keys go in.  Row 2 is the default.
 
-DHCP (2026-10-14 hardware boot): the link came up and dhcpcd leased
-192.168.0.38/24, but /bin/dhcpcd_wlan0.sh published mask 0.0.0.0 and no
-DNS (it took the netmask from the default route, a second before the lease
-existed), so Android had no usable network.  The publisher now reads
-dhcpcd's DHCPACK file; this runs it on the host against a stub dhcpcd.
+DHCP: dhcpcd adds the address and default route a second before it writes
+the lease, so a publisher that reads the interface sends Android mask
+0.0.0.0 and no DNS.  /bin/dhcpcd_wlan0.sh reads dhcpcd's DHCPACK file; this
+runs it on the host against a stub dhcpcd.
 """
 import struct
 import tempfile

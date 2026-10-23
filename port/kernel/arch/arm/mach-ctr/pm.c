@@ -110,9 +110,9 @@ static void __iomem *ctr_scu_base;
  *   "shell opened".  Nothing is powered down, so nothing has to be rebuilt.
  *
  *   deep (ctr_deep_sleep=1): whole-system PDN sleep, as open_agb_firm does
- *   it.  VRAM and the graphics blocks lose power.  The first time it really
- *   engaged on hardware (2026-10-14) the console did not come back: opening
- *   the lid left it dark and it had to be powered off.  libn3ds rebuilds
+ *   it.  VRAM and the graphics blocks lose power.  On hardware the console
+ *   does not come back from it: opening the lid leaves it dark and it has
+ *   to be powered off.  libn3ds rebuilds
  *   much more after PDN wake than this file does (a cold graphics reset,
  *   the LCD block and the LCD panel controllers over I2C, core 1 parked
  *   dormant before sleeping), so it stays opt-in until that is done.

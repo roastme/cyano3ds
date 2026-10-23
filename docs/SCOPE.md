@@ -14,16 +14,18 @@ so they are not mistaken for bugs.
   screen, so Android uses the bottom screen and the top screen stays the kernel
   console. Dual-screen apps or a second Android display would need framework
   work that does not exist.
-- **No sleep/suspend.** There is no resume path on this hardware, so the port
-  keeps the screen awake instead of suspending.
+- **No full-system suspend.** Closing the lid turns the screens off and idles
+  the CPU, but the whole-system sleep (`ctr_deep_sleep=1`) does not wake up,
+  so it is off by default.
 - **CPU.** The New 3DS runs at 804 MHz (ARM11 MPCore, ARMv6K, no NEON). Code
   must be `armeabi` (ARMv5) or `armv6`; `armeabi-v7a` will not run.
 - **RAM.** 256 MiB shared with the kernel, framebuffer and DMA buffers.
 
 ## Supported console
 
-Only the **New Nintendo 3DS / New 3DS XL / New 2DS XL** (`nintendo3ds_ktr.dtb`).
-The Old 3DS and 2DS are not supported.
+CyanogenMod 7.2 runs on the **New Nintendo 3DS / New 3DS XL / New 2DS XL**
+(`nintendo3ds_ktr.dtb`). The Old 3DS and 2DS (128 MB, one core at 268 MHz)
+only have the experimental CyanogenMod 6 build; see [CM6.md](CM6.md).
 
 ## Wireless
 
@@ -35,8 +37,8 @@ The Old 3DS and 2DS are not supported.
 
 ## Camera
 
-Not ported. CM's camera HAL is built as a stub; the 3DS camera sensors are not
-driven.
+The camera works, but CM7 builds its stub camera HAL; the working HAL is built
+separately and installed from the card. See [CM7.md](CM7.md#camera).
 
 ## Android version ceiling
 
@@ -44,7 +46,7 @@ driven.
 
 - Android 4.0 (ICS) and later require an **ARMv7** CPU, a **hardware OpenGL ES
   2.0** GPU (HWUI is the default renderer and `copybit` was removed) and
-  **≥340 MB** RAM. The 3DS is ARMv6K with no GPU and 256 MiB.
+  **≥340 MB** RAM. The New 3DS is ARMv6K with no GPU and 256 MiB.
 - Gingerbread is the last release that still runs on the software GLES 1.x
   stack and the old `/dev/log` logging ABI.
 
@@ -60,7 +62,7 @@ Linux kernel).
 ## Scope of the repository
 
 This repository carries the port's own code: the kernel patches and drivers,
-the device tree, the CM7 device tree, the initramfs/boot stage and the build
-scripts. The Linux kernel, `firm_linux_loader`, `arm9linuxfw`, the AOSP and
-CyanogenMod sources it builds against are fetched separately; see
+the device tree, the CM7 and CM6 device trees, the initramfs/boot stage and
+the build scripts. The Linux kernel, `firm_linux_loader`, `arm9linuxfw`, the
+AOSP and CyanogenMod sources it builds against are fetched separately; see
 [BUILD.md](BUILD.md).

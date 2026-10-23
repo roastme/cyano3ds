@@ -157,4 +157,4 @@ it off.
 | An app installs but crashes on launch | It calls APIs newer than API 10, or needs `armeabi-v7a` |
 | `UnsatisfiedLinkError` on launch | The APK is missing its `lib/armeabi/*.so` |
 | Boot hangs before the initramfs messages | `initramfs.cpio.gz` is larger than 8 MiB, or the card is not readable |
-| The screen turns off and input dies | The keep-awake helper did not start; see [CM7.md](CM7.md) §4i |
+| The screen turns off and input dies | The keep-awake helper did not start; see [CM7.md](CM7.md#input-and-the-screen) |

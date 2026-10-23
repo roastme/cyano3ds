@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Cameras (2026-10-14): Octoblimp's driver + their HAL moved to Gingerbread.
+"""Cameras: Octoblimp's driver + their HAL moved to Gingerbread.
 
   * kernel: ctr_cam.c is Android3DS/Octoblimp's file, unchanged; the DT node
     and Kconfig come from add-ctr-cam.py;
   * userspace: CM7's CameraService.cpp rebuilt with CameraHardwareN3ds (their
     HAL) instead of the stub: RGB565 preview (libagl shows NV21 grey), a
     takePicture() that does not join the preview thread under CameraService's
-    lock (that deadlocked the shutter), Gingerbread camera ids 0 = back
+    lock (that would deadlock the shutter), Gingerbread camera ids 0 = back
     (outer right) and 1 = front (inner) with orientation 90/270;
   * /dev/ctr_cam is made 0666 by the init (mediaserver is not root).
 """

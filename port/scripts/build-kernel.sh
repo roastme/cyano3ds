@@ -30,7 +30,7 @@ cd "$KD"
 
 # ---------------------------------------------------------------------------
 # The committed defconfig is the source of truth.  Copy it into the kernel
-# tree; never copy a generated one back over the tracked file (C-8).
+# tree; never copy a generated one back over the tracked file.
 # ---------------------------------------------------------------------------
 PORT_DEF="$PORT/kernel/configs/$DEF"
 if [ -f "$PORT_DEF" ]; then
@@ -82,9 +82,9 @@ make "$DEF" >/dev/null
 
 # Keep the port's own options enabled even when an older generated defconfig is
 # already on disk (the defconfig is only generated once, above).
-# Display and clock options the generator used to add.  CTR_LCD_FB depends on
-# FB, and a committed defconfig without these lines silently drops the LCD
-# driver (C-8 change), so they are enforced here too.
+# Display and clock options.  CTR_LCD_FB depends on FB, and a defconfig
+# without these lines silently drops the LCD driver, so they are enforced
+# here too.
 scripts/config --enable  FB                   \
 	       --enable  FRAMEBUFFER_CONSOLE  \
 	       --enable  FB_CFB_FILLRECT      \
@@ -141,20 +141,16 @@ scripts/config --disable ATH6KL            \
 # hang.
 scripts/config --enable  PREEMPT              \
 	       --disable PREEMPT_VOLUNTARY
-# Bring-up: with maxcpus=1 the softlockup/RCU detectors cannot name a hung
-# task, and the framework deadlocks ~12 s after systemReady.
+# With maxcpus=1 the softlockup/RCU detectors cannot name a hung task, so
+# the hung-task detector does it.
 scripts/config --enable  DETECT_HUNG_TASK          \
 	       --set-val DEFAULT_HUNG_TASK_TIMEOUT 20
-# The machine used to freeze hard at ~80 s with *no* report at all (no
-# hung-task report, no softlockup report, every SD writer stopped at once).
-# lockdep found the cause: pxi_txrx() in ctr_pxi.c slept (might_sleep/mutex/
-# wait_event) while the block layer called it from ->queue_rq under
-# rcu_read_lock.  That is fixed by fix-pxi-notify-defer.py (step 9/9).
-#
-# The options below are kept for future bring-up (they are very useful and
-# found this bug immediately), but they make the already-slow 3DS boot ~3-4x
-# slower - with them on, the framework needed ~10 minutes to reach the
-# launcher.  Re-enable when hunting another kernel bug.
+# Lock debugging, off by default.  A hard freeze with *no* report at all (no
+# hung-task, no softlockup, every SD writer stopped at once) is what lockdep
+# catches: pxi_txrx() in ctr_pxi.c sleeping under the block layer's
+# rcu_read_lock is one (fixed by fix-pxi-notify-defer.py).  These options make
+# the 3DS boot ~3-4x slower (about 10 minutes to the launcher), so enable them
+# only when hunting a kernel bug.
 #scripts/config --enable  DEBUG_KERNEL          \
 #	       --enable  LOCKDEP               \
 #	       --enable  PROVE_LOCKING         \

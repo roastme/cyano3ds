@@ -1,8 +1,8 @@
 # Cyano3DS
 
 CyanogenMod 7.2 (Android 2.3.7, API 10) running natively on the **New Nintendo
-3DS / New 3DS XL / New 2DS XL**, 
-and CyanogenMod 6 running on the Old 3DS via an experimental build.
+3DS / New 3DS XL / New 2DS XL**, and an experimental CyanogenMod 6 (Android
+2.2) build for the Old 3DS ([docs/CM6.md](docs/CM6.md)).
 
 Cyano3DS is not an emulator and not a Horizon app. `firm_linux_loader` starts a
 linux-3ds kernel, and Android's own init, Dalvik, SurfaceFlinger and framework
@@ -34,17 +34,18 @@ from fastboot3DS or Luma3DS; nothing on the NAND is written.
 | Battery / RTC | MCU (`BAT0`/`ADP0`) |
 | CPU | 804 MHz, all four cores (New 3DS) |
 | Wi-Fi | AR6014G driver (pre-mainline staging AR6K) + Nintendo NWM firmware |
+| Sleep | closing the lid turns the screens off; opening it wakes the console |
+| Camera | both outer and inner sensors, with a separately built camera HAL ([docs/CM7.md](docs/CM7.md#camera)) |
 
-## Not working yet
+## Not working
 
 - **No GPU driver.** Rendering is software only (`libGLES_android` /
   PixelFlinger).
 - **One display.** Android uses the bottom screen; the top screen stays the
   kernel console.
-- **No sleep/suspend.** The port keeps the screen awake because there is no
-  resume path on this hardware.
-- **No camera** (CM's camera is a stub), no Bluetooth, GPS, sensors or
-  telephony. The camera app currently crashes.
+- **No full-system suspend.** Lid sleep only turns the screens off and idles
+  the CPU; the deeper sleep (`ctr_deep_sleep=1`) does not wake up.
+- No Bluetooth, GPS, motion sensors or telephony.
 
 The hard limits of the platform are collected in
 [docs/SCOPE.md](docs/SCOPE.md).
@@ -67,8 +68,8 @@ The hard limits of the platform are collected in
 
 ## Installing
 
-Build output is assembled in `out/release/` (`mksd.sh out/release --with-android`; it contains no third-party APKs, see `SHA256SUMS`). Copy its contents to the root of the
-3DS's SD card and boot `Cyano3DS.firm` from fastboot3DS (*Boot setup…* →
+Build the card contents with `mksd.sh` (see below), copy them to the root of
+the 3DS's SD card and boot `Cyano3DS.firm` from fastboot3DS (*Boot setup…* →
 slot → pick the payload, or *Boot from file…*).
 
 The full card layout, first-boot expectations and troubleshooting are in
@@ -77,8 +78,8 @@ boot slot pointing at your normal `boot.firm`.
 
 ## Building
 
-The build runs on Linux or WSL2 (Ubuntu). It needs the ARM cross-toolchains, a
-device-tree compiler, `qemu-user-static`, `cpio`, Python 3 and a JDK. Nothing
+The build runs on Linux (Ubuntu; WSL2 works too). It needs the ARM
+cross-toolchains, a device-tree compiler, `qemu-user-static`, `cpio`, Python 3 and a JDK. Nothing
 in the build needs root except installing those packages with `apt`.
 `bash port/scripts/check-deps.sh <stage>` lists anything missing, with the
 apt package name, before a stage starts.
@@ -133,7 +134,7 @@ It builds on:
 - [linux-3ds](https://github.com/linux-3ds) — the kernel port, ARM11 FIRM
   loader and ARM9 SD/PXI firmware;
 - [Android3DS / Octoblimp](https://github.com/Octoblimp/Android-Eclair-3DS) —
-  an earlier Android port to the same hardware, whose AR6K Wi-Fi driver, SDIO
+  an Android 2.0 port to the same hardware, whose AR6K Wi-Fi driver, SDIO
   host changes and touchscreen driver are reused here;
 - CyanogenMod and the Android Open Source Project — the userspace.
 

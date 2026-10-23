@@ -16,8 +16,9 @@
  * sits on that path.  Keeping the quirk in the kernel is what lets Android run
  * unpatched.  See docs/DISPLAY.md.
  *
- * This is the M4 skeleton: the blit path is complete and self-contained; the
- * scaling/alpha paths are intentionally simple (correct, not fast).
+ * The blit path is complete and self-contained; the scaling/alpha paths are
+ * intentionally simple (correct, not fast).  Reference only: the CM7 device
+ * tree does not build it (see Android.mk).
  *
  * License: Apache-2.0, like the rest of the Android HALs (the interface it
  * implements is AOSP's hardware/copybit.h).

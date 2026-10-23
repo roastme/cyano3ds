@@ -1,16 +1,15 @@
 #!/bin/bash
 # stage-svox.sh - stage AOSP's svox into a CM7.2 tree.
 #
-# The CyanogenMod fork of external/svox was removed from GitHub (DMCA takedown),
+# The CyanogenMod fork of external/svox is not on GitHub (DMCA takedown),
 # so the gb-release-7.2 sync excludes it (see cm7-local-manifests/remove-broken.xml).
 # CM7's build still needs external/svox, so this stages the AOSP source at the
 # android-2.3.7_r1 tag in its place — the same source CM7.2 was released against.
 #
-# Run this AFTER repo sync and BEFORE the build (and after cleanup-cm7-tree.sh,
-# which no longer touches external/svox).
+# Run this AFTER repo sync and cleanup-cm7-tree.sh, and BEFORE the build.
 #
 # Usage:  bash port/scripts/stage-svox.sh [CM7_DIR]
-#         CM7_DIR=/root/p3ds/cm7 bash port/scripts/stage-svox.sh
+#         CM7_DIR=~/p3ds/cm7 bash port/scripts/stage-svox.sh
 
 set -euo pipefail
 

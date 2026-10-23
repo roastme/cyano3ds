@@ -2,15 +2,14 @@
 /*
  * tsmark.c - draw a crosshair on the TOP screen at the touch position
  *
- * M4 bring-up tool.  The TSC driver now reports real samples and Android's
- * EventHub/KeyInputQueue get them, but a tap on an on-screen button sometimes
- * does nothing, so we need to see *where* the touch lands independently of
- * Android (and of the bottom screen, which SurfaceFlinger owns).
+ * Diagnostic tool (diagnostic boots only).  When a tap on an on-screen button
+ * does nothing, this shows *where* the touch lands, independently of Android
+ * (and of the bottom screen, which SurfaceFlinger owns).
  *
  * The top screen is the kernel console (fb0) and is otherwise idle after boot,
  * so as long as the raw 320x240 touch is mapped correctly a red crosshair
  * should follow the finger 1:1 across the top screen.  If it is mirrored,
- * swapped or offset, that is immediately visible and tells us to fix the
+ * swapped or offset, that is immediately visible and points at the
  * coordinate mapping (or calibration) rather than the kernel.
  *
  * Mapping: the top framebuffer is 240x400 landscape-viewed-through-portrait,

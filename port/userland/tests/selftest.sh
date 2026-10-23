@@ -118,7 +118,7 @@ if [ -x /bin/pcmtest ]; then
 fi
 info "$(kmsg 'mic: ' | tail -n 2 | strip | tr '\n' ' ')"
 # playback pointer: the CSND's own position once it is seen running at the
-# stream rate (2026-10-14: the clock estimate made audio glitchy)
+# stream rate (the clock estimate makes audio glitchy)
 live=$(kmsg "CSND position register advances at the stream rate" | wc -l)
 clk=$(kmsg "CSND position moved .*using the clock pointer|CSND position register stuck" | wc -l)
 info "playback pointer: hardware on $live stream(s), clock fallback $clk time(s)"

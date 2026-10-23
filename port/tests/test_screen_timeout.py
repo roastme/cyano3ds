@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Screen timeout (2026-10-14 hardware boot): the panels went dark for good.
+"""Screen timeout: the panels must not go dark for good.
 
-The card's saved settings.db had CM7's default screen_off_timeout=60000;
-the keep-awake PortHelper is not built into the initramfs (no java/smali
-on the build host) and "stay on while plugged in" does nothing on battery,
-so PowerManagerService turned the screens off 60 s after the last touch and
-the POWER button (a clean shutdown on this port) could not bring them back.
-The init now writes screen_off_timeout (-1 = never, or the ms value in
-CYANO3DS/screen-timeout) into the restored settings.db before Android starts.
-This runs the init's SQL against a Gingerbread-shaped settings table.
+CM7's default screen_off_timeout is 60000; without the keep-awake PortHelper
+(it needs java/smali on the build host) and with "stay on while plugged in"
+doing nothing on battery, PowerManagerService turns the screens off 60 s
+after the last touch and the POWER button (a clean shutdown on this port)
+cannot bring them back.  The init writes screen_off_timeout (-1 = never, or
+the ms value in CYANO3DS/screen-timeout) into the restored settings.db
+before Android starts.  This runs the init's SQL against a
+Gingerbread-shaped settings table.
 """
 import re
 import sqlite3

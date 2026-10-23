@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
-"""Lid sleep must hold on real hardware (2026-10-14 fix).
+"""Lid sleep holds on real hardware.
 
-The first real-console boot slept and woke ~20 ms later, every 0.7 s, with
-wake reason "MCU": the MCU's LCD/backlight acknowledgement interrupts
-(bits 24-29), which the kernel never masks, arrived after pm.c's last GPIO
-check.  ctr_lid.c now masks every MCU interrupt but "shell opened" for the
-duration of the sleep, clears what is pending, and restores the mask on
-resume.  It also runs the /data save hook before sleeping and no longer gives
-up when a suspend is refused.
+The MCU acknowledges LCD/backlight changes with interrupts (bits 24-29) that
+the kernel never masks; they arrive after pm.c's last GPIO check and wake the
+console ~20 ms into every sleep (wake reason "MCU").  ctr_lid.c masks every
+MCU interrupt but "shell opened" for the duration of the sleep, clears what
+is pending, and restores the mask on resume.  It also runs the /data save
+hook before sleeping and keeps trying when a suspend is refused.
 
-Later the same day the first sleep that really reached PDN power-down on
-hardware never came back (dark, power LED in sleep, forced power-off).  The
-default is now a screen-off sleep: backlights off, CPU in WFI with the TWD
-as heartbeat, woken by reading the MCU line; PDN sleep is ctr_deep_sleep=1.
-And the Wi-Fi driver's suspend cut the AR6014's power, timed out on SDIO and
-left Wi-Fi dead, so the chip is now kept powered (MMC_PM_KEEP_POWER).
+A sleep that reaches PDN power-down does not come back on hardware, so the
+default is a screen-off sleep: backlights off, CPU in WFI with the TWD as
+heartbeat, woken by reading the MCU line; PDN sleep is ctr_deep_sleep=1.
+The AR6014 stays powered through sleep (MMC_PM_KEEP_POWER): cutting its
+power makes SDIO time out and leaves Wi-Fi dead.
 """
 import hashlib
 import shutil

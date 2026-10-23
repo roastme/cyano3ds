@@ -1,5 +1,5 @@
 # Keep text files as LF in the repository and on checkout.  The build scripts
-# under port/ run under WSL/Linux, so CRLF would break them.
+# under port/ are run by bash and python, so CRLF would break them.
 * text=auto eol=lf
 
 # Explicit binaries (never text-munge these).

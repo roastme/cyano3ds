@@ -1,9 +1,7 @@
 #!/bin/bash
 # setup-chroot.sh - create the Ubuntu 12.04 chroot that CM7.2 builds in.
 #
-# This used to need root (sudo for debootstrap, mount and chroot).  It is now a
-# wrapper around cm7-rootless.sh, which runs the same steps without root, so
-# the sudo prompt is gone.  Kept so existing instructions still work.
+# A wrapper around cm7-rootless.sh, which runs the same steps without root.
 #
 # Usage:
 #   bash port/scripts/setup-chroot.sh              # tools, bootstrap, chroot, sync

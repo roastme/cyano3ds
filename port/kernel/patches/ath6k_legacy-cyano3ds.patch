@@ -1,6 +1,6 @@
 diff -ruN a/hif/sdio/linux_sdio/include/hif_internal.h b/hif/sdio/linux_sdio/include/hif_internal.h
---- a/hif/sdio/linux_sdio/include/hif_internal.h	2026-10-23 20:22:23.742384607 +0800
-+++ b/hif/sdio/linux_sdio/include/hif_internal.h	2026-10-14 09:13:15.760084347 +0800
+--- a/hif/sdio/linux_sdio/include/hif_internal.h
++++ b/hif/sdio/linux_sdio/include/hif_internal.h
 @@ -93,6 +93,7 @@
      struct dl_list      ScatterReqHead;                /* scatter request list head */
      bool       scatter_enabled;               /* scatter enabled flag */
@@ -10,8 +10,8 @@ diff -ruN a/hif/sdio/linux_sdio/include/hif_internal.h b/hif/sdio/linux_sdio/inc
      atomic_t   irqHandling;
      HIF_DEVICE_POWER_CHANGE_TYPE powerConfig;
 diff -ruN a/hif/sdio/linux_sdio/src/hif.c b/hif/sdio/linux_sdio/src/hif.c
---- a/hif/sdio/linux_sdio/src/hif.c	2026-10-23 20:22:23.742499829 +0800
-+++ b/hif/sdio/linux_sdio/src/hif.c	2026-10-14 09:13:15.762562992 +0800
+--- a/hif/sdio/linux_sdio/src/hif.c
++++ b/hif/sdio/linux_sdio/src/hif.c
 @@ -213,6 +213,24 @@
  
  	device = ath6kl_get_hifdev(func);
@@ -21,8 +21,8 @@ diff -ruN a/hif/sdio/linux_sdio/src/hif.c b/hif/sdio/linux_sdio/src/hif.c
 +	 * through system sleep (as the 3DS itself does for StreetPass) and do
 +	 * not touch it.  The driver's own suspend path cuts the chip's power
 +	 * and would have to re-upload the NWM firmware on resume; on hardware
-+	 * (2026-10-14) its SDIO reset timed out, the suspend was refused (-16)
-+	 * and Wi-Fi stayed dead ("Wmi not ready") for the rest of the boot.
++	 * its SDIO reset times out, the suspend is refused (-16) and Wi-Fi
++	 * stays dead ("Wmi not ready") for the rest of the boot.
 +	 * Kept powered, the association may survive the sleep; if the AP
 +	 * drops it, wpa_supplicant simply reconnects after wake.
 +	 */
@@ -51,8 +51,8 @@ diff -ruN a/hif/sdio/linux_sdio/src/hif.c b/hif/sdio/linux_sdio/src/hif.c
  	    osdrvCallbacks.deviceSuspendHandler) {
  		status = osdrvCallbacks.
 diff -ruN a/include/wmi_api.h b/include/wmi_api.h
---- a/include/wmi_api.h	2026-10-23 20:22:23.744833897 +0800
-+++ b/include/wmi_api.h	2026-10-13 14:58:11.250127740 +0800
+--- a/include/wmi_api.h
++++ b/include/wmi_api.h
 @@ -193,6 +193,13 @@
                          u8 keyLength,u8 *keyRSC,
                          u8 *keyMaterial, u8 key_op_ctrl, u8 *mac,
@@ -68,8 +68,8 @@ diff -ruN a/include/wmi_api.h b/include/wmi_api.h
  int wmi_delete_krk_cmd(struct wmi_t *wmip);
  int wmi_deleteKey_cmd(struct wmi_t *wmip, u8 keyIndex);
 diff -ruN a/os/linux/ar6000_drv.c b/os/linux/ar6000_drv.c
---- a/os/linux/ar6000_drv.c	2026-10-23 20:22:23.745146925 +0800
-+++ b/os/linux/ar6000_drv.c	2026-10-19 11:53:56.620577536 +0800
+--- a/os/linux/ar6000_drv.c
++++ b/os/linux/ar6000_drv.c
 @@ -3514,6 +3514,24 @@
      AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
          ("AR6002 EAPOL %s #%d len=%d conn=%d\n",
@@ -96,8 +96,8 @@ diff -ruN a/os/linux/ar6000_drv.c b/os/linux/ar6000_drv.c
  
  /* N3DS_AR6014_RX_CENSUS: zero EAPOL frames is ambiguous between "nothing is
 diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
---- a/os/linux/cfg80211.c	2026-10-23 20:22:23.745511858 +0800
-+++ b/os/linux/cfg80211.c	2026-10-14 09:20:25.613596554 +0800
+--- a/os/linux/cfg80211.c
++++ b/os/linux/cfg80211.c
 @@ -40,8 +40,8 @@
   * command-8, command-17, and filter order only at connect submission.
   * N3DS_AR6014_CONNECT_SCAN_DWELL_REGRESSION: the #245->#247 split
@@ -129,7 +129,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
  /* N3DS_AR6014_NWM_AUTH_SWEEP: #253 proved the geometry -- a pinned BSSID, a
   * single channel and CONNECT_PROFILE_MATCH_DONE are what make NWM associate
   * at all -- so those are held fixed here and no longer swept.  What varies
-@@ -396,26 +402,118 @@
+@@ -396,26 +402,108 @@
   * PSK to answer it, which is exactly the observed failure.  Row 3 reproduces
   * #256 byte for byte as the control. */
  static const struct n3ds_connect_variant n3ds_connect_variants[] = {
@@ -176,28 +176,19 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
 + * /sys/module/ath6kl/parameters/n3ds_pairwise_key_usage) in case a
 + * different firmware revision wants the legacy 0.
 + *
-+ * 2026-10-04: every one of the seven WMI_ADD_CIPHER_KEY formats swept that
-+ * day (keyUsage 0 and 3, key_macaddr zeroed and set, 45-byte DSi form and
-+ * 51-byte NWM form, with and without the dsiwifi WMI_SYNCHRONIZE brackets)
-+ * came back WMI_CMDERROR cmd=0x0016 errorCode=2.  The key message is not the
-+ * problem, so this knob stays at NWM's 3 and the sweep is gone.
++ * Any key format is rejected (WMI_CMDERROR cmd=0x0016 errorCode=2, "illegal
++ * state") while the *association is open*: an open station has no pairwise
++ * or group cipher.  On an authenticated association the format matters:
++ * usage=3 is GROUP_USAGE|TX_USAGE, i.e. the PTK is installed as a *group*
++ * key, and a target that then cannot decrypt the AP's unicast traffic loses
++ * the BSS -- the link comes up, the keys go in, and 1.5 s later the target
++ * reports NO_NETWORK_AVAIL with a zero BSSID (disconnect reason=1).  So the
++ * variants below cover keyUsage PAIRWISE_USAGE as well, and the DSi's
++ * documented 45-byte form with it.
 + *
-+ * 2026-10-04 (later, key sweep revived): the sweep above was run while the
-+ * *association was open* -- an open station has no pairwise or group cipher,
-+ * which is why every format was rejected with "illegal state" and why 04i had
-+ * to fix the connect command first.  Now that the association is
-+ * authenticated and the keys are accepted, the question is open again, and it
-+ * has a strong new candidate: usage=3 is GROUP_USAGE|TX_USAGE, i.e. the PTK
-+ * is installed as a *group* key.  A target that then cannot decrypt the AP's
-+ * unicast traffic would lose the BSS exactly as observed -- the link comes up,
-+ * the keys go in, and 1.5 s later the target reports NO_NETWORK_AVAIL with a
-+ * zero BSSID (kmsg 2026-10-04 21:0x, disconnect reason=1 at 827 ms after a
-+ * successful handshake).  So sweep keyUsage over the semantically correct
-+ * PAIRWISE_USAGE as well, and the DSi's documented 45-byte form with it.
-+ *
-+ * The sweep advances once per *association* (see ar6k_cfg80211_connect_event),
++ * A sweep advances once per *association* (see ar6k_cfg80211_connect_event),
 + * not per connect() call: wpa_supplicant issues several connects per attempt,
-+ * which is what made the 04h sweep sit on one row forever.
++ * so a per-call sweep would sit on one row forever.
 + */
 +struct n3ds_key_variant {
 +    const char *name;
@@ -206,23 +197,22 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
 +};
 +
 +static const struct n3ds_key_variant n3ds_key_variants[] = {
-+    { "nwm-51-u3",  3, 51 },   /* what the 21:0x boot sent */
++    { "nwm-51-u3",  3, 51 },   /* NWM's own template */
 +    { "dsi-51-u0",  PAIRWISE_USAGE, 51 },
 +    { "dsi-45-u0",  PAIRWISE_USAGE, 45 },
 +    { "dsi-51-u1",  GROUP_USAGE, 51 },
 +};
 +#define N3DS_KEY_VARIANTS (int)(sizeof(n3ds_key_variants) / sizeof(n3ds_key_variants[0]))
 +
-+/* N3DS_AR6014_KEY_VARIANT_PINNED (2026-10-13): row 2, "dsi-45-u0", is the
-+ * one that works.  In the 2026-10-04 real-hardware log (the sweep ran rows
-+ * 0, 1, 2 in one boot) rows 0 and 1 lost the BSS ~1.5 s after the keys went
-+ * in (NWM disconnect reason=1), while with row 2 the link stayed up for
-+ * minutes and the target delivered decrypted traffic: broadcast ARP, mDNS
++/* N3DS_AR6014_KEY_VARIANT_PINNED: row 2, "dsi-45-u0", is the one that
++ * works.  On hardware rows 0 and 1 lose the BSS ~1.5 s after the keys go in
++ * (NWM disconnect reason=1), while with row 2 the link stays up for minutes
++ * and the target delivers decrypted traffic: broadcast ARP, mDNS
 + * and a 576-byte DHCP OFFER addressed to the console.  Row 2 is also exactly
 + * what the open-source DSi library sends to the same firmware family
 + * (dsiwifi, arm_iop/source/ath/wmi.twl.c wmi_add_cipher_key(): the 45-byte
 + * struct, keyUsage 0 for the PTK and 1 for the GTK, key_op_ctrl 3).
-+ * Sweeping from row 0 meant every boot spent its first two associations on
++ * Sweeping from row 0 would spend every boot's first two associations on
 + * formats that drop.  -1 still sweeps. */
 +#define N3DS_KEYVAR_DEFAULT 2
 +static int n3ds_keyvar = N3DS_KEYVAR_DEFAULT; /* -1 = sweep */
@@ -258,7 +248,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
  /* N3DS_AR6014_NWM_AUTH_SWEEP: which variant produced the most recent
   * association.  It is latched later, and only if that association went on to
   * carry a handshake frame.  n3ds_eapol_rx_count is zeroed by
-@@ -456,14 +554,27 @@
+@@ -456,14 +544,27 @@
      CRYPTO_TYPE nwm_group_crypto = NONE_CRYPT;
      u8 nwm_pairwise_crypto_len = 0;
      u8 nwm_group_crypto_len = 0;
@@ -289,7 +279,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
      if (n3ds_connect_latched < 0 && n3ds_connect_assoc_variant >= 0 &&
          atomic_read(&n3ds_eapol_rx_count) > 0) {
          n3ds_connect_latched = n3ds_connect_assoc_variant;
-@@ -538,7 +649,7 @@
+@@ -538,7 +639,7 @@
          }
      }
  
@@ -298,7 +288,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
         ar->arSsidLen == sme->ssid_len &&
         !memcmp(ar->arSsid, sme->ssid, ar->arSsidLen)) {
          reconnect_flag = true;
-@@ -552,10 +663,14 @@
+@@ -552,10 +653,14 @@
              return -EIO;
          }
          return 0;
@@ -308,15 +298,15 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
      }
 +    /* N3DS_AR6014_REASSOC_GUARD: do NOT ar6000_disconnect() here.  The CM7
 +     * wext supplicant issues three connects per association attempt (set
-+     * SSID, set BSSID, set key); the second one used to hit this branch while
-+     * the first was still SME_CONNECTING, send WMI_DISCONNECT (reason 3), and
++     * SSID, set BSSID, set key); the second one would hit this branch while
++     * the first is still SME_CONNECTING, send WMI_DISCONNECT (reason 3), and
 +     * emit an "AP == 00:00:00:00:00:00" wireless event that made
 +     * wpa_supplicant blacklist the BSS and re-scan.  The following
 +     * WMI_CONNECT supersedes whatever the target was doing anyway. */
  
      A_MEMZERO(ar->arSsid, sizeof(ar->arSsid));
      ar->arSsidLen = sme->ssid_len;
-@@ -634,7 +749,6 @@
+@@ -634,7 +739,6 @@
       * Linux CCMP/AES 8 to NWM wire value 4 here as well as in ADD_CIPHER_KEY.
       * Open profiles retain NONE/1 and static WEP retains type 2 plus lengths. */
      if (cv->crypto == 8) {
@@ -324,7 +314,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
          nwm_pairwise_crypto = (CRYPTO_TYPE)ar->arPairwiseCrypto;
          nwm_group_crypto = (CRYPTO_TYPE)ar->arGroupCrypto;
          nwm_pairwise_crypto_len = ar->arPairwiseCryptoLen;
-@@ -655,6 +769,35 @@
+@@ -655,6 +759,35 @@
      /* cv->crypto == 0 leaves NONE/NONE: a bare open association with every
       * cipher left to the host supplicant. */
  
@@ -360,7 +350,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
      if (sme->ie_len > 0xffff) {
          up(&ar->arSem);
          return -EINVAL;
-@@ -678,8 +821,9 @@
+@@ -678,8 +811,9 @@
      }
      AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
          ("AR6002 connect: NWM APP-IE len=%u host-WPA tuple "
@@ -372,7 +362,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
           nwm_group_crypto, nwm_group_crypto_len));
  
      AR_DEBUG_PRINTF(ATH_DEBUG_INFO, ("%s: Connect called with authmode %d dot11 auth %d"\
-@@ -739,12 +883,21 @@
+@@ -739,12 +873,21 @@
       * the 52-byte WMI_CONNECT_CMD this driver chooses, so one capture pins the
       * whole submission instead of the half the old log covered. */
      ar->arConnectCtrlFlags = cv->ctrl_flags;
@@ -395,7 +385,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
           nwm_pairwise_crypto, nwm_pairwise_crypto_len,
           nwm_group_crypto, nwm_group_crypto_len,
           ar->arReqBssid, ar->arChannelHint,
-@@ -753,8 +906,7 @@
+@@ -753,8 +896,7 @@
           ar->arSsidLen));
      status = wmi_connect_cmd(ar->arWmi, ar->arNetworkType,
                              ar->arDot11AuthMode,
@@ -405,7 +395,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
                              nwm_pairwise_crypto, nwm_pairwise_crypto_len,
                              nwm_group_crypto, nwm_group_crypto_len,
                              ar->arSsidLen, ar->arSsid,
-@@ -800,8 +952,8 @@
+@@ -800,8 +942,8 @@
      struct ieee80211_mgmt *mgmt = NULL;
      struct ieee80211_channel *ibss_channel = NULL;
      s32 signal = 50 * 100;
@@ -416,7 +406,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
      unsigned char *ptr_ie_buf = ie_buf;
      unsigned char *ieeemgmtbuf = NULL;
      u8 source_mac[ATH_MAC_LEN];
-@@ -865,6 +1017,29 @@
+@@ -865,6 +1007,29 @@
               channel, bssid, atomic_read(&n3ds_eapol_rx_count)));
      }
  
@@ -446,7 +436,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
      if((ADHOC_NETWORK & networkType)) {
          if(NL80211_IFTYPE_ADHOC != ar->wdev->iftype) {
              AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
-@@ -883,17 +1058,11 @@
+@@ -883,17 +1048,11 @@
          }
      }
  
@@ -469,7 +459,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
      /*
       * Earlier we were updating the cfg about bss by making a beacon frame
       * only if the entry for bss is not there. This can have some issue if
-@@ -956,6 +1125,35 @@
+@@ -956,6 +1115,35 @@
                      ("AR6002 connect: bss ie src=assocreq len=%u\n",
                       ie_buf_len));
              }
@@ -505,7 +495,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
      }
  
      size = offsetof(struct ieee80211_mgmt, u)
-@@ -1001,10 +1199,10 @@
+@@ -1001,10 +1189,10 @@
  				    le16_to_cpu(size),
  				    signal, GFP_KERNEL);
      kfree(ieeemgmtbuf);
@@ -517,7 +507,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
          return;
      }
  
-@@ -1017,17 +1215,31 @@
+@@ -1017,17 +1205,31 @@
           * every later cfg80211_connect() short-circuited with -EALREADY
           * before this driver was reached. */
          ar->smeState = SME_CONNECTED;
@@ -554,7 +544,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
              .bssid = bssid,
              .req_ie = assocReqIe,
              .req_ie_len = assocReqLen,
-@@ -1131,6 +1343,126 @@
+@@ -1131,6 +1333,126 @@
       * ASSOC_FAILED or BSS_DISCONNECTED, so those were swallowed even while a
       * connect was pending. */
  
@@ -565,9 +555,9 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
 +     * one stale channel hint (the AP moved, the host's BSS entry is older than
 +     * the AP's own re-scan, the target was left on another channel by the
 +     * preceding 13-channel scan) turns every attempt into a guaranteed
-+     * failure: the 2026-10-04 20:03 boot sent byte-identical WMI_CONNECTs to
-+     * the 17:40 boot that associated in 56 ms and then reported NO_NETWORK_AVAIL
-+     * four times and AUTH_FAILED twice with nothing delivered at all.
++     * failure: byte-identical WMI_CONNECTs that associate in 56 ms on one
++     * boot can report NO_NETWORK_AVAIL four times and AUTH_FAILED twice, with
++     * nothing delivered at all, on the next.
 +     *
 +     * Spend up to N3DS_NO_NETWORK_RETRIES_MAX retries re-submitting the same
 +     * command with the channel table handed back to the target (numChannels 0)
@@ -576,8 +566,8 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
 +     * is still waiting on this connect, so nothing is reported to cfg80211;
 +     * only a failed recovery falls through to the normal notification. */
 +    /* N3DS_AR6014_SILENT_REASSOC: the target drops a *live* association
-+     * 1.5 s after the keys go in (2026-10-04 21:0x: handshake complete at
-+     * 81.34 s, NO_NETWORK_AVAIL with a zero BSSID at 82.70 s).  Telling
++     * 1.5 s after the keys go in (handshake complete, then NO_NETWORK_AVAIL
++     * with a zero BSSID).  Telling
 +     * cfg80211 about that costs a full teardown: the framework drops its
 +     * DHCP lease, wpa_supplicant blacklists the BSSID ("Added BSSID
 +     * <AP-BSSID> into blacklist") and the whole cycle restarts from a
@@ -681,7 +671,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
      if (reason == DISCONNECT_CMD && ar->arAutoAuthStage &&
          ar->smeState == SME_CONNECTING &&
          ar->arDot11AuthMode == OPEN_AUTH) {
-@@ -1216,6 +1548,7 @@
+@@ -1216,6 +1538,7 @@
  void
  ar6k_cfg80211_scan_node(void *arg, bss_t *ni)
  {
@@ -689,17 +679,16 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
      struct wiphy *wiphy = (struct wiphy *)arg;
      u16 size;
      unsigned char *ieeemgmtbuf = NULL;
-@@ -1279,12 +1612,40 @@
+@@ -1279,12 +1602,39 @@
       * The harvester stores its conservative estimate in signed ni_rssi. */
      signal = (s32)ni->ni_rssi * 100;
  
 +    /* N3DS_AR6014_SCAN_CENSUS: print every BSS the target hands up with the
 +     * channel it claims and its signal estimate.  A connect attempt that dies
 +     * with NO_NETWORK_AVAIL is ambiguous between "we cannot hear the AP" and
-+     * "the AP refuses us" (2026-10-04 20:03: identical WMI_CONNECT bytes to
-+     * the 17:40 boot that associated in 56 ms, but 1.5 s of nothing and zero
-+     * delivered frames), and this line is what separates the two on the next
-+     * capture: signal in the -40s means the radio path is fine and the AP is
++     * "the AP refuses us" (identical WMI_CONNECT bytes can associate in
++     * 56 ms on one boot and get 1.5 s of nothing on the next), and this line
++     * is what separates the two in a capture: signal in the -40s means the radio path is fine and the AP is
 +     * refusing, -80s or worse means coverage/tuning. */
 +    {
 +        static atomic_t n3ds_scan_log_left = ATOMIC_INIT(32);
@@ -722,8 +711,8 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
 +    /*
 +     * GFP_ATOMIC: this runs under wlan_iterate_nodes()'s node-table lock,
 +     * from the SDIO interrupt thread ("BUG: sleeping function called from
-+     * invalid context ... cfg80211_inform_single_bss_frame_data" on
-+     * hardware, 2026-10-14).  The returned reference is not kept.
++     * invalid context ... cfg80211_inform_single_bss_frame_data" with a
++     * sleeping allocation).  The returned reference is not kept.
 +     */
 +    bss = cfg80211_inform_bss_frame(wiphy, channel, mgmt,
 +                                    le16_to_cpu(size),
@@ -733,7 +722,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
  
      kfree (ieeemgmtbuf);
  }
-@@ -1532,6 +1893,7 @@
+@@ -1532,6 +1882,7 @@
      struct ar_key *key = NULL;
      u8 key_usage;
      u8 key_type;
@@ -741,7 +730,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
      int status = 0;
  
      AR_DEBUG_PRINTF(ATH_DEBUG_INFO, ("%s:\n", __func__));
-@@ -1555,10 +1917,31 @@
+@@ -1555,10 +1906,31 @@
      key = &ar->keys[key_index];
      A_MEMZERO(key, sizeof(struct ar_key));
  
@@ -776,7 +765,7 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
      }
  
      if(params) {
-@@ -1604,9 +1987,14 @@
+@@ -1604,9 +1976,14 @@
                      key_usage, key->seq_len));
  
      ar->arDefTxKeyIndex = key_index;
@@ -794,8 +783,8 @@ diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
  
      if (status) {
 diff -ruN a/wmi/wmi.c b/wmi/wmi.c
---- a/wmi/wmi.c	2026-10-23 20:22:23.746587554 +0800
-+++ b/wmi/wmi.c	2026-10-13 14:58:11.259205423 +0800
+--- a/wmi/wmi.c
++++ b/wmi/wmi.c
 @@ -2132,8 +2132,8 @@
      why = (ev->errorCode <= INTERNAL_ERROR) ? reason[ev->errorCode]
                                              : "unrecognized code";

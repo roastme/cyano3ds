@@ -249,7 +249,7 @@ stage_sync() {
 	fi
 	# GitHub resets connections and rate-limits parallel fetches.  repo resumes
 	# finished projects, so a retry only fetches what is left.  The back-off
-	# grows so a retry does not deepen the rate limit (complaint C-32).
+	# grows so a retry does not deepen the rate limit.
 	local i wait
 	for i in 1 2 3 4 5 6 7 8; do
 		echo "    repo sync attempt $i of 8 (-j$JOBS)"
