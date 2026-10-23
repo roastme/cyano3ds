@@ -2,8 +2,8 @@
 /*
  * fbsay.c - display text on a framebuffer, for consoles with no keyboard
  *
- * Bring-up tool for the Cyano3DS port.  The 3DS has no
- * serial port, no keyboard and no network in Linux yet, so when something goes
+ * Bring-up tool for the Cyano3DS port.  The 3DS has no serial port and no
+ * keyboard, and Wi-Fi only comes up late in the boot, so when something goes
  * wrong during boot the only channel is the pair of LCDs: one is the kernel
  * console (fb0, top screen) and the other is the display this port drives
  * (fb1, bottom screen).

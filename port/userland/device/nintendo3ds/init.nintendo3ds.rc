@@ -69,7 +69,7 @@ on init
     setprop ro.product.device "nintendo3ds"
     setprop ro.product.board "nintendo3ds"
     setprop ro.build.characteristics default,nomedia
-    # no GPU, no camera, no telephony, no network yet
+    # no GPU driver, no telephony
     setprop ro.hardware nintendo3ds
     setprop ro.opengles.version 65536        # GLES 1.1, software (libGLES_android)
 

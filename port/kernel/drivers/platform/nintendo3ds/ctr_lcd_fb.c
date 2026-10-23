@@ -925,8 +925,7 @@ static void ctr_diag_write_file(const char *text, size_t len)
  * The 15 s tmpfs->SD flusher (and every other Linux SD writer) wedges on the
  * ARM11/PXI/MMC write path under framework load.  Once it does, every card log
  * stops at once and everything after that is trapped in tmpfs and lost when the
- * console is powered off, so we cannot see whether Android reaches the launcher
- * or composites a frame.
+ * console is powered off, so the log of what led up to a hang is gone.
  *
  * The ARM9 is an independent CPU and owns the SD controller.  This driver keeps
  * the latest ctr-diag text in a 4 KiB page of DRAM and hands the ARM9 the

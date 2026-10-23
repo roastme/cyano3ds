@@ -37,7 +37,7 @@ if [ -f "$PORT_DEF" ]; then
 	cp "$PORT_DEF" "arch/arm/configs/$DEF"
 	echo "==> using committed $PORT_DEF"
 elif [ ! -f "arch/arm/configs/$DEF" ]; then
-	# No committed defconfig yet: derive one from linux-3ds' nintendo3ds_defconfig.
+	# No committed defconfig: derive one from linux-3ds' nintendo3ds_defconfig.
 	# The result goes to $OUT; review it and commit it under port/kernel/configs/.
 	echo "==> generating arch/arm/configs/$DEF (no committed defconfig found)"
 	make nintendo3ds_defconfig >/dev/null
@@ -212,9 +212,9 @@ fi
 # service as a PF_UNIX socket ("Failed to open socket 'property_service':
 # Function not implemented" = ENOSYS when CONFIG_UNIX is off) and listens for
 # kernel uevents on a NETLINK socket.  linux-3ds' defconfig has CONFIG_NET off
-# (the 3DS has no network hardware), which makes the socket syscalls return
+# (it ships no network driver), which makes the socket syscalls return
 # ENOSYS, so turn the protocol stacks on.  They are pure software; no driver is
-# needed for init to get its sockets, and the framework needs INET anyway.
+# needed for init to get its sockets, and the framework and Wi-Fi need INET.
 scripts/config --enable  NET                  \
 	       --enable  UNIX                 \
 	       --enable  INET                 \

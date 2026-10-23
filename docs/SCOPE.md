@@ -46,7 +46,8 @@ separately and installed from the card. See [CM7.md](CM7.md#camera).
 
 - Android 4.0 (ICS) and later require an **ARMv7** CPU, a **hardware OpenGL ES
   2.0** GPU (HWUI is the default renderer and `copybit` was removed) and
-  **≥340 MB** RAM. The New 3DS is ARMv6K with no GPU and 256 MiB.
+  **≥340 MB** RAM. The New 3DS is ARMv6K with no GPU driver and
+  256 MiB.
 - Gingerbread is the last release that still runs on the software GLES 1.x
   stack and the old `/dev/log` logging ABI.
 

@@ -795,18 +795,16 @@ ls -l "$ROOT/bin/fbtest" "$ROOT/bin/fbsay" "$ROOT/bin/logdump" \
 # normal userspace screen-off timer.  Once the "screen" turns off (mPowerState
 # loses SCREEN_ON_BIT/SCREEN_BRIGHT_BIT) WindowManagerService drops every touch
 # and consumes every WAKE_DROPPED key, so the UI looks frozen and the panel
-# goes dark -- exactly the "audio plays, then the screen goes off and nothing
-# responds" report.  `svc power stayon true` only holds a SCREEN_DIM lock while
-# mIsPowered, and the 3DS reports a *discharging* battery, so it is not enough.
+# goes dark while audio keeps playing.  `svc power stayon true` only holds a
+# SCREEN_DIM lock while mIsPowered, and the 3DS reports a *discharging*
+# battery, so it is not enough.
 #
 # This smali helper polls IPowerManager.userActivity() every 5 s (which resets
 # the timeout and keeps the bright bit) and calls
 # IWindowManager.disableKeyguard() once.  It only uses interface methods whose
 # signatures are stable across the Android flavors --
 # userActivity(JZ)V, disableKeyguard(IBinder,String),
-# inKeyguardRestrictedInputMode()Z -- so the same jar works on every flavor
-# (an old note claiming "the archived flavor's binder interface is different" was
-# wrong: the difference is the *jar that was deployed*, not the interface).
+# inKeyguardRestrictedInputMode()Z -- so the same jar works on every flavor.
 # It runs as root, so the DEVICE_POWER/DISABLE_KEYGUARD checks pass.
 # ---------------------------------------------------------------------------
 SMALI_JAR="$PORT/../tools/smali.jar"
