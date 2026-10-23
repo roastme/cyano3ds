@@ -47,8 +47,15 @@ This port uses the staging driver as resurrected and cfg80211/WEXT-ported by
 the Octoblimp/Android3DS project.  `port/scripts/fix-wifi-octoblimp.py`
 (called by `apply-kernel-port.sh`) installs it:
 
-* `port/kernel/drivers/staging/ath6k_legacy/` — the driver
-  (`CONFIG_ATH6K_LEGACY`, built into `zImage`);
+* `drivers/staging/ath6k_legacy/` — the driver (`CONFIG_ATH6K_LEGACY`, built
+  into `zImage`). It is **not** vendored in this repository. The script
+  fetches Octoblimp's `patches/linux.diff` at the commit pinned as `OCTO_SHA`,
+  extracts the `ath6k_legacy` files from it, and applies
+  `port/kernel/patches/ath6k_legacy-cyano3ds.patch` (Cyano3DS's changes:
+  cfg80211 and HIF fixes, keep-power suspend, calibration). Needs network
+  access to github.com during `apply-kernel-port.sh`. To change the driver,
+  edit the patch: extract the base the same way, edit a copy, and regenerate
+  the patch with `diff -ruN a b` so the paths are `a/...` and `b/...`;
 * `port/kernel/drivers/platform/nintendo3ds/ctr_sdhc.{c,h}` — Octoblimp's SDIO
   host changes (AR6002 PIO edge fix, card-IRQ timer fallback, `wifi_recover`
   sysfs) *plus* the Wi-Fi power handling: it requests the `wifi-enable` GPIO,

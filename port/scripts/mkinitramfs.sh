@@ -1266,24 +1266,6 @@ PUBLISHER
 	if grep -q "^service dhcpcd /bin/dhcpcd_wlan0.sh" "$ROOT/init.rc"; then
 		echo "    init.rc: dhcpcd -> /bin/dhcpcd_wlan0.sh (property publisher)"
 	fi
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
 	if [ "$ANDROID_FLAVOR" = cm6 ]; then
 		cat > "$ROOT/bin/memguard" <<'MEMGUARD'
 #!/bin/sh

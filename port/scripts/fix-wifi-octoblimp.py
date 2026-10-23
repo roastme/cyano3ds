@@ -21,12 +21,19 @@ script installs, together with Octoblimp's SDIO host changes in ctr_sdhc.c
 The driver is built in and probes at boot with the defaults Octoblimp used:
 `fwmode = 1` (STA) and `wlaninitmode = WLAN_INIT_MODE_DRV`.
 
-Everything it needs lives in this repository, copied from the Octoblimp tree
-(the base kernel patch plus the AR6014/NWM patch series already applied):
+The driver itself is not vendored in this repository.  install_tree() fetches
+it from Octoblimp's Android-Eclair-3DS at a pinned commit (the kernel patch
+series in patches/linux.diff, which adds drivers/staging/ath6k_legacy/), then
+applies port/kernel/patches/ath6k_legacy-cyano3ds.patch on top: the Cyano3DS
+changes (cfg80211 and HIF fixes, keep-power suspend, calibration).  The
+Octoblimp base is pinned by OCTO_SHA, so the result is reproducible.
 
-    port/kernel/drivers/staging/ath6k_legacy/       the driver (new)
-    port/kernel/drivers/platform/nintendo3ds/ctr_sdhc.{c,h}
-    arch/arm/boot/dts/nintendo3ds.dtsi              the `nwm` node
+What still lives in this repository:
+
+    port/kernel/patches/ath6k_legacy-cyano3ds.patch         Cyano3DS changes to the driver
+    port/kernel/drivers/platform/nintendo3ds/ctr_sdhc.{c,h} Octoblimp's SDIO host
+
+The `nwm` device-tree node is written by patch_dtsi() below.
 
 It is idempotent: running it twice changes nothing.
 """
@@ -35,12 +42,20 @@ import pathlib
 import os
 import re
 import shutil
+import subprocess
 import sys
+import tempfile
 
 PORT = pathlib.Path(__file__).resolve().parent.parent   # <repo>/port
 PORT_KERNEL = PORT / "kernel"
-DRIVER_SRC = PORT_KERNEL / "drivers/staging/ath6k_legacy"
 SDHC_SRC = PORT_KERNEL / "drivers/platform/nintendo3ds"
+DRIVER_PATCH = PORT_KERNEL / "patches/ath6k_legacy-cyano3ds.patch"
+
+OCTO_URL = "https://github.com/Octoblimp/Android-Eclair-3DS.git"
+OCTO_SHA = "3227b806deb5bd1a3ba1a03fb4fc94a5bab23162"   # main, pinned
+DRIVER_PATH = "drivers/staging/ath6k_legacy"
+# Octoblimp's tree left a backup copy of ar6000_drv.c behind; it is not built.
+DRIVER_SKIP = "os/linux/ar6000_drv.c.pre256"          # relative to DRIVER_PATH
 
 
 def die(msg):
@@ -87,13 +102,48 @@ def patch_dtsi(kd):
     print("    dtsi: nwm node replaced (interrupts/clocks/caps/wifi-enable)")
 
 
+def fetch_octo_driver(dst):
+    """Extract drivers/staging/ath6k_legacy from Octoblimp's kernel patch
+    series at OCTO_SHA into dst, then apply the Cyano3DS delta on top."""
+    with tempfile.TemporaryDirectory(prefix="ath6k-") as tmp:
+        tmp = pathlib.Path(tmp)
+        octo = tmp / "octo"
+        octo.mkdir()
+        git = ["git", "-C", str(octo)]
+        subprocess.run(git + ["init", "-q"], check=True)
+        subprocess.run(git + ["fetch", "-q", "--depth=1", OCTO_URL, OCTO_SHA],
+                       check=True)
+        diff = subprocess.run(git + ["show", "FETCH_HEAD:patches/linux.diff"],
+                              check=True, capture_output=True).stdout
+        series = tmp / "linux.diff"
+        series.write_bytes(diff)
+
+        ext = tmp / "extract"
+        ext.mkdir()
+        subprocess.run(["git", "-C", str(ext), "init", "-q"], check=True)
+        subprocess.run(["git", "-C", str(ext), "apply", "--whitespace=nowarn",
+                        "--include=" + DRIVER_PATH + "/*", str(series)],
+                       check=True)
+        upstream = ext / DRIVER_PATH
+        if not upstream.is_dir():
+            die("Octoblimp patch series has no %s" % DRIVER_PATH)
+
+        shutil.copytree(upstream, dst)
+    (dst / DRIVER_SKIP).unlink(missing_ok=True)
+
+    if not DRIVER_PATCH.exists():
+        die("missing driver delta %s" % DRIVER_PATCH)
+    subprocess.run(["patch", "-p1", "--batch", "-d", str(dst),
+                    "-i", str(DRIVER_PATCH)], check=True,
+                   stdout=subprocess.DEVNULL)
+
+
 def install_tree(kd):
-    dst = kd / "drivers/staging/ath6k_legacy"
-    if not DRIVER_SRC.is_dir():
-        die("missing ported driver source at %s" % DRIVER_SRC)
-    shutil.copytree(DRIVER_SRC, dst, dirs_exist_ok=True)
-    print("    ath6k_legacy: %d files installed" %
-          sum(1 for _ in dst.rglob("*") if _.is_file()))
+    dst = kd / DRIVER_PATH
+    shutil.rmtree(dst, ignore_errors=True)
+    fetch_octo_driver(dst)
+    print("    ath6k_legacy: %d files installed (Octoblimp %s + delta)" %
+          (sum(1 for _ in dst.rglob("*") if _.is_file()), OCTO_SHA[:12]))
 
     for f in ("ctr_sdhc.c", "ctr_sdhc.h"):
         src = SDHC_SRC / f

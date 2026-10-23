@@ -50,7 +50,7 @@ check(order(light, "TWD_CTRL_EN | TWD_CTRL_AUTO_RELOAD | TWD_CTRL_IRQ_EN",
       "screen-off sleep: no TWD heartbeat, or the MCU line is not polled after each WFI")
 check("PDN_CNT" not in light and "ctr_gfx_sleep" not in light, "screen-off sleep touches PDN/graphics")
 
-hif = read(KERNEL / "drivers/staging/ath6k_legacy/hif/sdio/linux_sdio/src/hif.c")
+hif = read(ath6k_driver() / "hif/sdio/linux_sdio/src/hif.c")
 check(order(hif, "static int ath6kl_hifdev_suspend", "MMC_PM_KEEP_POWER",
             "sdio_set_host_pm_flags(func, MMC_PM_KEEP_POWER)", "return 0;", "deviceSuspendHandler"),
       "Wi-Fi suspend does not keep the chip powered before the power-cut path")
@@ -61,7 +61,7 @@ check("mmc->pm_caps |= MMC_PM_KEEP_POWER;" in sdhc, "3ds-sdhc does not offer MMC
 check(order(sdhc, "static int ctr_sdhc_pm_resume", "ctr_sdhc_reset(host);",
             "__ctr_sdhc_set_ios(host->mmc, &host->mmc->ios);", "ctr_sdhc_sdio_arm(host, true);"),
       "3ds-sdhc resume does not restore clock/bus width and the SDIO poll")
-cfg = read(KERNEL / "drivers/staging/ath6k_legacy/os/linux/cfg80211.c")
+cfg = read(ath6k_driver() / "os/linux/cfg80211.c")
 scan = cfg[cfg.index("ar6k_cfg80211_scan_node(void *arg, bss_t *ni)"):]
 scan = scan[:scan.index("\n}\n")]
 check("signal, GFP_ATOMIC);" in scan and "GFP_KERNEL" not in scan,

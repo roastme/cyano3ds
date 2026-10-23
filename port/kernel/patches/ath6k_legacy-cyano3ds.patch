@@ -1,0 +1,897 @@
+diff -ruN a/hif/sdio/linux_sdio/include/hif_internal.h b/hif/sdio/linux_sdio/include/hif_internal.h
+--- a/hif/sdio/linux_sdio/include/hif_internal.h	2026-10-23 20:22:23.742384607 +0800
++++ b/hif/sdio/linux_sdio/include/hif_internal.h	2026-10-14 09:13:15.760084347 +0800
+@@ -93,6 +93,7 @@
+     struct dl_list      ScatterReqHead;                /* scatter request list head */
+     bool       scatter_enabled;               /* scatter enabled flag */
+     bool   is_suspend;
++    bool   kept_power;                    /* suspended with MMC_PM_KEEP_POWER */
+     bool   is_disabled;
+     atomic_t   irqHandling;
+     HIF_DEVICE_POWER_CHANGE_TYPE powerConfig;
+diff -ruN a/hif/sdio/linux_sdio/src/hif.c b/hif/sdio/linux_sdio/src/hif.c
+--- a/hif/sdio/linux_sdio/src/hif.c	2026-10-23 20:22:23.742499829 +0800
++++ b/hif/sdio/linux_sdio/src/hif.c	2026-10-14 09:13:15.762562992 +0800
+@@ -213,6 +213,24 @@
+ 
+ 	device = ath6kl_get_hifdev(func);
+ 
++	/*
++	 * N3DS_WIFI_KEEP_POWER_SUSPEND: keep the AR6014 powered and running
++	 * through system sleep (as the 3DS itself does for StreetPass) and do
++	 * not touch it.  The driver's own suspend path cuts the chip's power
++	 * and would have to re-upload the NWM firmware on resume; on hardware
++	 * (2026-10-14) its SDIO reset timed out, the suspend was refused (-16)
++	 * and Wi-Fi stayed dead ("Wmi not ready") for the rest of the boot.
++	 * Kept powered, the association may survive the sleep; if the AP
++	 * drops it, wpa_supplicant simply reconnects after wake.
++	 */
++	if (device && (sdio_get_host_pm_caps(func) & MMC_PM_KEEP_POWER) &&
++	    !sdio_set_host_pm_flags(func, MMC_PM_KEEP_POWER)) {
++		device->is_suspend = true;
++		device->kept_power = true;
++		dev_info(dev, "AR6002 suspend: keeping the chip powered\n");
++		return 0;
++	}
++
+ 	if (device && device->claimedContext &&
+ 	    osdrvCallbacks.deviceSuspendHandler) {
+ 		/* set true first for PowerStateChangeNotify(..) */
+@@ -243,6 +261,12 @@
+ 	struct hif_device *device;
+ 
+ 	device = ath6kl_get_hifdev(func);
++	if (device && device->kept_power) {
++		device->kept_power = false;
++		device->is_suspend = false;
++		dev_info(dev, "AR6002 resume: chip was kept powered\n");
++		return 0;
++	}
+ 	if (device && device->claimedContext &&
+ 	    osdrvCallbacks.deviceSuspendHandler) {
+ 		status = osdrvCallbacks.
+diff -ruN a/include/wmi_api.h b/include/wmi_api.h
+--- a/include/wmi_api.h	2026-10-23 20:22:23.744833897 +0800
++++ b/include/wmi_api.h	2026-10-13 14:58:11.250127740 +0800
+@@ -193,6 +193,13 @@
+                         u8 keyLength,u8 *keyRSC,
+                         u8 *keyMaterial, u8 key_op_ctrl, u8 *mac,
+                         WMI_SYNC_FLAG sync_flag);
++/* N3DS_AR6014_KEY_WIRE_LEN: wire_len selects the 45-byte DSi form (2Dh) or
++ * the full 51-byte NWM template (0 = use the template). */
++int wmi_addKey_cmd_ex(struct wmi_t *wmip, u8 keyIndex,
++                        CRYPTO_TYPE keyType, u8 keyUsage,
++                        u8 keyLength,u8 *keyRSC,
++                        u8 *keyMaterial, u8 key_op_ctrl, u8 *mac,
++                        WMI_SYNC_FLAG sync_flag, u8 wire_len);
+ int wmi_add_krk_cmd(struct wmi_t *wmip, u8 *krk);
+ int wmi_delete_krk_cmd(struct wmi_t *wmip);
+ int wmi_deleteKey_cmd(struct wmi_t *wmip, u8 keyIndex);
+diff -ruN a/os/linux/ar6000_drv.c b/os/linux/ar6000_drv.c
+--- a/os/linux/ar6000_drv.c	2026-10-23 20:22:23.745146925 +0800
++++ b/os/linux/ar6000_drv.c	2026-10-19 11:53:56.620577536 +0800
+@@ -3514,6 +3514,24 @@
+     AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
+         ("AR6002 EAPOL %s #%d len=%d conn=%d\n",
+          dir, n, (int)A_NETBUF_LEN(skb), connected));
++
++    /* The whole frame, 32 bytes per line: with the PSK, both nonces and the
++     * supplicant's own PTK debug the MIC of message 2/4 can be recomputed
++     * offline, which tells a wrong passphrase from a corrupted frame. */
++    if (n <= 6) {
++        int off, len = (int)A_NETBUF_LEN(skb);
++
++        for (off = 0; off < len && off < 192; off += 32) {
++            int cnt = len - off < 32 ? len - off : 32;
++            char hex[32 * 2 + 1];
++            int i;
++
++            for (i = 0; i < cnt; i++)
++                snprintf(hex + i * 2, 3, "%02x", eth[off + i]);
++            AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
++                ("AR6002 EAPOL %s #%d @%03d %s\n", dir, n, off, hex));
++        }
++    }
+ }
+ 
+ /* N3DS_AR6014_RX_CENSUS: zero EAPOL frames is ambiguous between "nothing is
+diff -ruN a/os/linux/cfg80211.c b/os/linux/cfg80211.c
+--- a/os/linux/cfg80211.c	2026-10-23 20:22:23.745511858 +0800
++++ b/os/linux/cfg80211.c	2026-10-14 09:20:25.613596554 +0800
+@@ -40,8 +40,8 @@
+  * command-8, command-17, and filter order only at connect submission.
+  * N3DS_AR6014_CONNECT_SCAN_DWELL_REGRESSION: the #245->#247 split
+  * accidentally replaced the disassembly-verified 20 ms home/active/passive
+- * dwell recovered at 0x0012ad70 (documented in HANDOFF.md's #245 entry,
+- * command 8 with periods 0xffff and dwell 20 ms) with an invented 105 ms
++ * dwell recovered at 0x0012ad70 (command 8 with periods 0xffff and dwell
++ * 20 ms) with an invented 105 ms
+  * value, on the mistaken theory that it needed to exceed a beacon interval.
+  * That caused every real-hardware WPA2 connect to end in NWM disconnect
+  * reason 1 (NO_NETWORK_AVAIL) about 4.5s later, even though the identical
+@@ -378,13 +378,19 @@
+ struct n3ds_connect_variant {
+     const char *name;
+     u8 real_auth;        /* send ar->arAuthMode instead of NONE_AUTH */
++    u8 auth_mode;        /* N3DS_AUTH_KEEP = derive as before, else wire value */
+     u8 crypto;           /* 0 none, 4 NWM wire value, 8 Linux AES_CRYPT */
++    u8 pair_crypto;      /* N3DS_CRYPTO_KEEP = derive as before, else wire value */
++    u8 group_crypto;
+     u8 real_bssid;       /* lock sme->bssid instead of the wildcard */
+     u8 one_channel;      /* restrict the target channel table to the hint */
+     u8 stock_scan;       /* stock scan params instead of the NWM policy */
+     u16 ctrl_flags;      /* WMI_CONNECT_CMD.ctrl_flags, never before varied */
+ };
+ 
++#define N3DS_AUTH_KEEP    0xff
++#define N3DS_CRYPTO_KEEP  0xff
++
+ /* N3DS_AR6014_NWM_AUTH_SWEEP: #253 proved the geometry -- a pinned BSSID, a
+  * single channel and CONNECT_PROFILE_MATCH_DONE are what make NWM associate
+  * at all -- so those are held fixed here and no longer swept.  What varies
+@@ -396,26 +402,118 @@
+  * PSK to answer it, which is exactly the observed failure.  Row 3 reproduces
+  * #256 byte for byte as the control. */
+ static const struct n3ds_connect_variant n3ds_connect_variants[] = {
+-    { "nwm-auth",    0, 4, 1, 1, 1, CONNECT_PROFILE_MATCH_DONE },
+-    { "nwm-open",    0, 0, 1, 1, 1, CONNECT_PROFILE_MATCH_DONE },
+-    { "nwm-aes",     0, 8, 1, 1, 1, CONNECT_PROFILE_MATCH_DONE },
+-    { "match-done",  1, 8, 1, 1, 1, CONNECT_PROFILE_MATCH_DONE },
+-    { "real-nwm",    1, 4, 1, 1, 1, CONNECT_PROFILE_MATCH_DONE },
+-    { "nwm-user",    0, 4, 1, 1, 1, CONNECT_PROFILE_MATCH_DONE |
+-                                    CONNECT_ASSOC_POLICY_USER },
+-    { "nwm-noflags", 0, 4, 1, 1, 1, 0 },
+-    { "nwm-nwmscan", 0, 4, 1, 1, 0, CONNECT_PROFILE_MATCH_DONE },
++    { "dsi-ccmp-tkip", 0, 5, 0, 4, 3, 1, 1, 1, CONNECT_PROFILE_MATCH_DONE },
++    { "nwm-auth",      0, N3DS_AUTH_KEEP, 4, N3DS_CRYPTO_KEEP,
++                        N3DS_CRYPTO_KEEP, 1, 1, 1, CONNECT_PROFILE_MATCH_DONE },
++    { "dsi-none-ccmp", 0, 1, 0, 4, 3, 1, 1, 1, CONNECT_PROFILE_MATCH_DONE },
++    { "nwm-open",      0, N3DS_AUTH_KEEP, 0, N3DS_CRYPTO_KEEP,
++                        N3DS_CRYPTO_KEEP, 1, 1, 1, CONNECT_PROFILE_MATCH_DONE },
++    { "nwm-aes",       0, N3DS_AUTH_KEEP, 8, N3DS_CRYPTO_KEEP,
++                        N3DS_CRYPTO_KEEP, 1, 1, 1, CONNECT_PROFILE_MATCH_DONE },
++    { "match-done",    1, N3DS_AUTH_KEEP, 8, N3DS_CRYPTO_KEEP,
++                        N3DS_CRYPTO_KEEP, 1, 1, 1, CONNECT_PROFILE_MATCH_DONE },
++    { "real-nwm",      1, N3DS_AUTH_KEEP, 4, N3DS_CRYPTO_KEEP,
++                        N3DS_CRYPTO_KEEP, 1, 1, 1, CONNECT_PROFILE_MATCH_DONE },
++    { "nwm-user",      0, N3DS_AUTH_KEEP, 4, N3DS_CRYPTO_KEEP,
++                        N3DS_CRYPTO_KEEP, 1, 1, 1,
++                        CONNECT_PROFILE_MATCH_DONE | CONNECT_ASSOC_POLICY_USER },
++    { "nwm-noflags",   0, N3DS_AUTH_KEEP, 4, N3DS_CRYPTO_KEEP,
++                        N3DS_CRYPTO_KEEP, 1, 1, 1, 0 },
++    { "nwm-nwmscan",   0, N3DS_AUTH_KEEP, 4, N3DS_CRYPTO_KEEP,
++                        N3DS_CRYPTO_KEEP, 1, 1, 0, CONNECT_PROFILE_MATCH_DONE },
+ };
+ 
+-static int n3ds_connvar = -1;
++static int n3ds_connvar = 0;
+ module_param(n3ds_connvar, int, 0644);
+ MODULE_PARM_DESC(n3ds_connvar,
+     "pin one AR6014 connect variant (-1 sweeps until one associates)");
+ 
++/* N3DS_AR6014_NWM_PAIRWISE_USAGE: Nintendo's NWM firmware installs its
++ * temporal key from 0x001191e8 with WMI_ADD_CIPHER_KEY keyUsage=3
++ * (GROUP_USAGE|TX_USAGE), not the KEY_USAGE=0 (pairwise) the older DSi
++ * host used.  Keep it tunable (sysfs
++ * /sys/module/ath6kl/parameters/n3ds_pairwise_key_usage) in case a
++ * different firmware revision wants the legacy 0.
++ *
++ * 2026-10-04: every one of the seven WMI_ADD_CIPHER_KEY formats swept that
++ * day (keyUsage 0 and 3, key_macaddr zeroed and set, 45-byte DSi form and
++ * 51-byte NWM form, with and without the dsiwifi WMI_SYNCHRONIZE brackets)
++ * came back WMI_CMDERROR cmd=0x0016 errorCode=2.  The key message is not the
++ * problem, so this knob stays at NWM's 3 and the sweep is gone.
++ *
++ * 2026-10-04 (later, key sweep revived): the sweep above was run while the
++ * *association was open* -- an open station has no pairwise or group cipher,
++ * which is why every format was rejected with "illegal state" and why 04i had
++ * to fix the connect command first.  Now that the association is
++ * authenticated and the keys are accepted, the question is open again, and it
++ * has a strong new candidate: usage=3 is GROUP_USAGE|TX_USAGE, i.e. the PTK
++ * is installed as a *group* key.  A target that then cannot decrypt the AP's
++ * unicast traffic would lose the BSS exactly as observed -- the link comes up,
++ * the keys go in, and 1.5 s later the target reports NO_NETWORK_AVAIL with a
++ * zero BSSID (kmsg 2026-10-04 21:0x, disconnect reason=1 at 827 ms after a
++ * successful handshake).  So sweep keyUsage over the semantically correct
++ * PAIRWISE_USAGE as well, and the DSi's documented 45-byte form with it.
++ *
++ * The sweep advances once per *association* (see ar6k_cfg80211_connect_event),
++ * not per connect() call: wpa_supplicant issues several connects per attempt,
++ * which is what made the 04h sweep sit on one row forever.
++ */
++struct n3ds_key_variant {
++    const char *name;
++    u8 pairwise_usage;   /* WMI keyUsage for the PTK */
++    u8 wire_len;         /* 45 = DSi 2Dh form, 51 = full NWM template */
++};
++
++static const struct n3ds_key_variant n3ds_key_variants[] = {
++    { "nwm-51-u3",  3, 51 },   /* what the 21:0x boot sent */
++    { "dsi-51-u0",  PAIRWISE_USAGE, 51 },
++    { "dsi-45-u0",  PAIRWISE_USAGE, 45 },
++    { "dsi-51-u1",  GROUP_USAGE, 51 },
++};
++#define N3DS_KEY_VARIANTS (int)(sizeof(n3ds_key_variants) / sizeof(n3ds_key_variants[0]))
++
++/* N3DS_AR6014_KEY_VARIANT_PINNED (2026-10-13): row 2, "dsi-45-u0", is the
++ * one that works.  In the 2026-10-04 real-hardware log (the sweep ran rows
++ * 0, 1, 2 in one boot) rows 0 and 1 lost the BSS ~1.5 s after the keys went
++ * in (NWM disconnect reason=1), while with row 2 the link stayed up for
++ * minutes and the target delivered decrypted traffic: broadcast ARP, mDNS
++ * and a 576-byte DHCP OFFER addressed to the console.  Row 2 is also exactly
++ * what the open-source DSi library sends to the same firmware family
++ * (dsiwifi, arm_iop/source/ath/wmi.twl.c wmi_add_cipher_key(): the 45-byte
++ * struct, keyUsage 0 for the PTK and 1 for the GTK, key_op_ctrl 3).
++ * Sweeping from row 0 meant every boot spent its first two associations on
++ * formats that drop.  -1 still sweeps. */
++#define N3DS_KEYVAR_DEFAULT 2
++static int n3ds_keyvar = N3DS_KEYVAR_DEFAULT; /* -1 = sweep */
++module_param(n3ds_keyvar, int, 0644);
++MODULE_PARM_DESC(n3ds_keyvar,
++    "pin one AR6014 WMI_ADD_CIPHER_KEY variant (default 2 = dsi-45-u0; -1 sweeps one per association)");
++
++static int n3ds_keyvar_current = N3DS_KEYVAR_DEFAULT;
++
+ static unsigned int n3ds_connect_attempt;
+ static int n3ds_connect_latched = -1;
+ static int n3ds_connect_current = -1;
+ 
++/* N3DS_AR6014_NO_NETWORK_RETRY: the wire tuple of the last WMI_CONNECT, and
++ * how many recovery attempts this boot has spent. */
++static u8 n3ds_last_auth_mode;
++static u8 n3ds_last_pair_crypto;
++static u8 n3ds_last_pair_len;
++static u8 n3ds_last_group_crypto;
++static u8 n3ds_last_group_len;
++static unsigned int n3ds_no_network_retries;
++#define N3DS_NO_NETWORK_RETRIES_MAX 3
++
++/* N3DS_AR6014_SILENT_REASSOC: how many consecutive post-association drops the
++ * driver papers over without telling cfg80211. */
++static unsigned int n3ds_silent_reassocs;
++#define N3DS_SILENT_REASSOC_MAX 6
++
++/* N3DS_AR6014_REASSOC_GUARD: association state captured before
++ * ar6k_cfg80211_connect() overwrites smeState. */
++static bool n3ds_was_connected;
++
+ /* N3DS_AR6014_NWM_AUTH_SWEEP: which variant produced the most recent
+  * association.  It is latched later, and only if that association went on to
+  * carry a handshake frame.  n3ds_eapol_rx_count is zeroed by
+@@ -456,14 +554,27 @@
+     CRYPTO_TYPE nwm_group_crypto = NONE_CRYPT;
+     u8 nwm_pairwise_crypto_len = 0;
+     u8 nwm_group_crypto_len = 0;
++    AUTH_MODE nwm_auth_mode;
+ 
+     AR_DEBUG_PRINTF(ATH_DEBUG_INFO, ("%s: \n", __func__));
++
++    /* N3DS_AR6014_REASSOC_GUARD: cfg80211/the WEXT supplicant routinely
++     * issues a second connect for the SSID that has *just* associated
++     * (ESSID + BSSID + WPA IE are three separate wext operations).  The
++     * connect event sets SME_CONNECTED before ar6000_connect_event() gets
++     * to ar->arConnected = true, so for that window the old "same SSID but
++     * not connected" branch below fired ar6000_disconnect() -- an explicit
++     * WMI_DISCONNECT (reason 3) -- and killed the association before
++     * wpa_supplicant could run the 4-way handshake.  Remember the state
++     * before smeState is overwritten. */
++    n3ds_was_connected = (ar->arConnected == true) ||
++                         (ar->smeState == SME_CONNECTED);
+     ar->smeState = SME_CONNECTING;
+ 
+     /* N3DS_AR6014_NWM_AUTH_SWEEP: latch the previous variant only if the
+-     * association it produced actually carried EAPOL.  Latching on
+-     * association alone pinned row 0 for all 19 attempts of #256 and left
+-     * every other row untried on hardware. */
++     * association it produced actually carried EAPOL.  Associating is not
++     * winning: the connected-but-silent rows are the ones that hand WPA to
++     * the firmware, which has no PSK. */
+     if (n3ds_connect_latched < 0 && n3ds_connect_assoc_variant >= 0 &&
+         atomic_read(&n3ds_eapol_rx_count) > 0) {
+         n3ds_connect_latched = n3ds_connect_assoc_variant;
+@@ -538,7 +649,7 @@
+         }
+     }
+ 
+-    if(ar->arConnected == true &&
++    if(n3ds_was_connected == true &&
+        ar->arSsidLen == sme->ssid_len &&
+        !memcmp(ar->arSsid, sme->ssid, ar->arSsidLen)) {
+         reconnect_flag = true;
+@@ -552,10 +663,14 @@
+             return -EIO;
+         }
+         return 0;
+-    } else if(ar->arSsidLen == sme->ssid_len &&
+-              !memcmp(ar->arSsid, sme->ssid, ar->arSsidLen)) {
+-	    ar6000_disconnect(ar);
+     }
++    /* N3DS_AR6014_REASSOC_GUARD: do NOT ar6000_disconnect() here.  The CM7
++     * wext supplicant issues three connects per association attempt (set
++     * SSID, set BSSID, set key); the second one used to hit this branch while
++     * the first was still SME_CONNECTING, send WMI_DISCONNECT (reason 3), and
++     * emit an "AP == 00:00:00:00:00:00" wireless event that made
++     * wpa_supplicant blacklist the BSS and re-scan.  The following
++     * WMI_CONNECT supersedes whatever the target was doing anyway. */
+ 
+     A_MEMZERO(ar->arSsid, sizeof(ar->arSsid));
+     ar->arSsidLen = sme->ssid_len;
+@@ -634,7 +749,6 @@
+      * Linux CCMP/AES 8 to NWM wire value 4 here as well as in ADD_CIPHER_KEY.
+      * Open profiles retain NONE/1 and static WEP retains type 2 plus lengths. */
+     if (cv->crypto == 8) {
+-        /* What stock ath6kl_legacy sends: the ciphers cfg80211 asked for. */
+         nwm_pairwise_crypto = (CRYPTO_TYPE)ar->arPairwiseCrypto;
+         nwm_group_crypto = (CRYPTO_TYPE)ar->arGroupCrypto;
+         nwm_pairwise_crypto_len = ar->arPairwiseCryptoLen;
+@@ -655,6 +769,35 @@
+     /* cv->crypto == 0 leaves NONE/NONE: a bare open association with every
+      * cipher left to the host supplicant. */
+ 
++    /* N3DS_AR6014_DSI_CONNECT_TUPLE: rows that name the ciphers (and the auth
++     * mode) outright.  This is the hole the old derivation fell into: with a
++     * CCMP-pairwise/TKIP-group network neither `crypto == 4` branch matched,
++     * so the command went out as an *open* association with NONE in both
++     * cipher fields, and the target then refused every WMI_ADD_CIPHER_KEY
++     * with errorCode=2 (illegal state) -- an open station has no pairwise or
++     * group cipher to install.  Wire values are the AR6014's own numbering
++     * (NONE 1, WEP 2, TKIP 3, AES 4), lengths stay zero except for WEP. */
++    if (cv->pair_crypto != N3DS_CRYPTO_KEEP ||
++        cv->group_crypto != N3DS_CRYPTO_KEEP) {
++        nwm_pairwise_crypto = (CRYPTO_TYPE)cv->pair_crypto;
++        nwm_group_crypto = (CRYPTO_TYPE)cv->group_crypto;
++        if (nwm_pairwise_crypto == WEP_CRYPT)
++            nwm_pairwise_crypto_len = ar->arPairwiseCryptoLen;
++        if (nwm_group_crypto == WEP_CRYPT)
++            nwm_group_crypto_len = ar->arGroupCryptoLen;
++        AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
++            ("AR6002 connect: NWM tuple from AP ciphers: pair=%u/%u "
++             "group=%u/%u\n", nwm_pairwise_crypto, nwm_pairwise_crypto_len,
++             nwm_group_crypto, nwm_group_crypto_len));
++    }
++
++    /* dsiwifi's working WMI_CONNECT carries the DSi-numbered WPA2_PSK_AUTH
++     * (5); this header's AUTH_MODE enum calls that 0x10. */
++    if (cv->auth_mode != N3DS_AUTH_KEEP)
++        nwm_auth_mode = (AUTH_MODE)cv->auth_mode;
++    else
++        nwm_auth_mode = cv->real_auth ? (AUTH_MODE)ar->arAuthMode : NONE_AUTH;
++
+     if (sme->ie_len > 0xffff) {
+         up(&ar->arSem);
+         return -EINVAL;
+@@ -678,8 +821,9 @@
+     }
+     AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
+         ("AR6002 connect: NWM APP-IE len=%u host-WPA tuple "
+-         "auth=1 pair=%u/%u group=%u/%u\n", (unsigned int)sme->ie_len,
+-         nwm_pairwise_crypto, nwm_pairwise_crypto_len,
++         "auth=%u pair=%u/%u group=%u/%u\n", (unsigned int)sme->ie_len,
++         (unsigned int)nwm_auth_mode, nwm_pairwise_crypto,
++         nwm_pairwise_crypto_len,
+          nwm_group_crypto, nwm_group_crypto_len));
+ 
+     AR_DEBUG_PRINTF(ATH_DEBUG_INFO, ("%s: Connect called with authmode %d dot11 auth %d"\
+@@ -739,12 +883,21 @@
+      * the 52-byte WMI_CONNECT_CMD this driver chooses, so one capture pins the
+      * whole submission instead of the half the old log covered. */
+     ar->arConnectCtrlFlags = cv->ctrl_flags;
++
++    /* N3DS_AR6014_NO_NETWORK_RETRY: remember the wire tuple actually
++     * submitted, so the recovery connect after NO_NETWORK_AVAIL repeats it
++     * exactly and changes nothing but the search geometry. */
++    n3ds_last_auth_mode = nwm_auth_mode;
++    n3ds_last_pair_crypto = nwm_pairwise_crypto;
++    n3ds_last_pair_len = nwm_pairwise_crypto_len;
++    n3ds_last_group_crypto = nwm_group_crypto;
++    n3ds_last_group_len = nwm_group_crypto_len;
+     AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
+         ("AR6002 connect: VARIANT %d %s auth=%u pair=%u/%u group=%u/%u "
+          "bssid=%pM chan=%u onechan=%u stockscan=%u "
+          "flags=0x%04x nettype=%u dot11auth=%u ssidlen=%u\n",
+          n3ds_connect_current, cv->name,
+-         cv->real_auth ? ar->arAuthMode : (unsigned int)NONE_AUTH,
++         (unsigned int)nwm_auth_mode,
+          nwm_pairwise_crypto, nwm_pairwise_crypto_len,
+          nwm_group_crypto, nwm_group_crypto_len,
+          ar->arReqBssid, ar->arChannelHint,
+@@ -753,8 +906,7 @@
+          ar->arSsidLen));
+     status = wmi_connect_cmd(ar->arWmi, ar->arNetworkType,
+                             ar->arDot11AuthMode,
+-                            cv->real_auth ? (AUTH_MODE)ar->arAuthMode
+-                                          : NONE_AUTH,
++                            nwm_auth_mode,
+                             nwm_pairwise_crypto, nwm_pairwise_crypto_len,
+                             nwm_group_crypto, nwm_group_crypto_len,
+                             ar->arSsidLen, ar->arSsid,
+@@ -800,8 +952,8 @@
+     struct ieee80211_mgmt *mgmt = NULL;
+     struct ieee80211_channel *ibss_channel = NULL;
+     s32 signal = 50 * 100;
+-    u8 ie_buf_len = 0;
+-    unsigned char ie_buf[256];
++    u16 ie_buf_len = 0;
++    unsigned char ie_buf[512];
+     unsigned char *ptr_ie_buf = ie_buf;
+     unsigned char *ieeemgmtbuf = NULL;
+     u8 source_mac[ATH_MAC_LEN];
+@@ -865,6 +1017,29 @@
+              channel, bssid, atomic_read(&n3ds_eapol_rx_count)));
+     }
+ 
++    /* N3DS_AR6014_NO_NETWORK_RETRY: an association is proof the geometry
++     * worked, so give the next independent connect a fresh retry budget. */
++    n3ds_no_network_retries = 0;
++
++    /* N3DS_AR6014_SILENT_REASSOC: a completed association earns a fresh
++     * silent-recovery budget. */
++    n3ds_silent_reassocs = 0;
++
++    /* N3DS_AR6014_KEY_VARIANT: advance the key-format row once per
++     * association.  One boot therefore walks the whole table, because the
++     * target tears the link down after each attempt and wpa_supplicant
++     * re-associates. */
++    if (n3ds_keyvar < 0) {
++        n3ds_keyvar_current = (n3ds_keyvar_current + 1) % N3DS_KEY_VARIANTS;
++        AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
++            ("AR6002 key: next association uses variant %d \"%s\" "
++             "(usage=%u wire=%u)\n",
++             n3ds_keyvar_current,
++             n3ds_key_variants[n3ds_keyvar_current].name,
++             n3ds_key_variants[n3ds_keyvar_current].pairwise_usage,
++             n3ds_key_variants[n3ds_keyvar_current].wire_len));
++    }
++
+     if((ADHOC_NETWORK & networkType)) {
+         if(NL80211_IFTYPE_ADHOC != ar->wdev->iftype) {
+             AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
+@@ -883,17 +1058,11 @@
+         }
+     }
+ 
+-    /* Before informing the join/connect event, make sure that
+-     * bss entry is present in scan list, if it not present
+-     * construct and insert into scan list, otherwise that
+-     * event will be dropped on the way by cfg80211, due to
+-     * this keys will not be plumbed in case of WEP and
+-     * application will not be aware of join/connect status. */
+-    bss = cfg80211_get_bss(ar->wdev->wiphy, NULL, bssid,
+-                           ar->wdev->ssid, ar->wdev->ssid_len,
+-                           ((ADHOC_NETWORK & networkType) ? WLAN_CAPABILITY_IBSS : WLAN_CAPABILITY_ESS),
+-                           ((ADHOC_NETWORK & networkType) ? WLAN_CAPABILITY_IBSS : WLAN_CAPABILITY_ESS));
+-
++    /* N3DS_CFG80211_CONNECT_BSS: the bss entry is built and inserted by
++     * cfg80211_inform_bss_frame() below, and the exact pointer it returns is
++     * handed to cfg80211 in the connect/roam notification.  The old
++     * cfg80211_get_bss() probe here was overwritten immediately and only
++     * leaked its reference. */
+     /*
+      * Earlier we were updating the cfg about bss by making a beacon frame
+      * only if the entry for bss is not there. This can have some issue if
+@@ -956,6 +1125,35 @@
+                     ("AR6002 connect: bss ie src=assocreq len=%u\n",
+                      ie_buf_len));
+             }
++
++            /* N3DS_AR6014_CONNECT_BSS_SSID: cfg80211's wext-compat
++             * SIOCGIWESSID (net/wireless/wext-sme.c) reads the SSID element
++             * out of wdev->current_bss.  NWM's connect-event blob does not
++             * always carry it, so the CM7 WEXT supplicant got a zero-length
++             * SSID back, could not match its configured network and aborted
++             * the 4-way handshake with
++             * "WPA: No SSID info found (msg 1 of 4)."
++             * The SSID is known from the connect request, so prepend the
++             * element when the blob lacks it. */
++            if (ar->arSsidLen > 0 && ar->arSsidLen <= 32 &&
++                (ie_buf_len < 2 || ptr_ie_buf[0] != WLAN_EID_SSID) &&
++                (u16)(2 + ar->arSsidLen) + ie_buf_len <= sizeof(ie_buf)) {
++                memmove(ie_buf + 2 + ar->arSsidLen, ptr_ie_buf, ie_buf_len);
++                ie_buf[0] = WLAN_EID_SSID;
++                ie_buf[1] = (u8)ar->arSsidLen;
++                memcpy(ie_buf + 2, ar->arSsid, ar->arSsidLen);
++                ptr_ie_buf = ie_buf;
++                ie_buf_len = 2 + ar->arSsidLen + ie_buf_len;
++                AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
++                    ("AR6002 connect: prepended SSID ie len=%u total=%u\n",
++                     (unsigned int)ar->arSsidLen,
++                     (unsigned int)ie_buf_len));
++            } else if (ar->arSsidLen > 0 && ie_buf_len >= 2 &&
++                       ptr_ie_buf[0] == WLAN_EID_SSID) {
++                AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
++                    ("AR6002 connect: bss ie already has SSID len=%u\n",
++                     ptr_ie_buf[1]));
++            }
+     }
+ 
+     size = offsetof(struct ieee80211_mgmt, u)
+@@ -1001,10 +1199,10 @@
+ 				    le16_to_cpu(size),
+ 				    signal, GFP_KERNEL);
+     kfree(ieeemgmtbuf);
+-    cfg80211_put_bss(ar->wdev->wiphy, bss);
+ 
+     if((ADHOC_NETWORK & networkType)) {
+         cfg80211_ibss_joined(ar->arNetDev, bssid, ibss_channel, GFP_KERNEL);
++        cfg80211_put_bss(ar->wdev->wiphy, bss);
+         return;
+     }
+ 
+@@ -1017,17 +1215,31 @@
+          * every later cfg80211_connect() short-circuited with -EALREADY
+          * before this driver was reached. */
+         ar->smeState = SME_CONNECTED;
+-        cfg80211_connect_result(ar->arNetDev, bssid,
+-                                assocReqIe, assocReqLen,
+-                                assocRespIe, assocRespLen,
+-                                WLAN_STATUS_SUCCESS, GFP_KERNEL);
++        /* N3DS_CFG80211_CONNECT_BSS: NWM's connect event reports both IE
++         * lengths as 0 and the beacon blob it does carry does not always
++         * make cfg80211_get_bss() match wdev->ssid.  cfg80211_connect_result()
++         * then looked the BSS up on its own, missed, hit
++         * WARN_ON(!cr->bss) at net/wireless/sme.c:757 and returned *before*
++         * setting wdev->current_bss/connected.  The link worked for the
++         * nl80211 supplicant (nl80211_send_connect_result() runs first) but
++         * the CM7 WEXT supplicant re-reads SIOCGIWAP, got 00:00:00:00:00:00
++         * and tore the association down.  cfg80211_connect_bss() lets the
++         * driver name the exact BSS entry it just informed, so the successful
++         * path always completes.  It consumes the reference. */
++        cfg80211_connect_bss(ar->arNetDev, bssid, bss,
++                             assocReqIe, assocReqLen,
++                             assocRespIe, assocRespLen,
++                             WLAN_STATUS_SUCCESS, GFP_KERNEL,
++                             NL80211_TIMEOUT_UNSPECIFIED);
+         AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
+             ("AR6002 connect: connect_result SUCCESS bssid=%pM reqIe=%u "
+-             "respIe=%u\n", bssid, assocReqLen, assocRespLen));
++             "respIe=%u bss=%s\n", bssid, assocReqLen, assocRespLen,
++             bss ? "exact" : "lookup"));
+     } else {
+         /* inform roam event to cfg80211 */
+         struct cfg80211_roam_info roam_info = {
+             .channel = ibss_channel,
++            .bss = bss,
+             .bssid = bssid,
+             .req_ie = assocReqIe,
+             .req_ie_len = assocReqLen,
+@@ -1131,6 +1343,126 @@
+      * ASSOC_FAILED or BSS_DISCONNECTED, so those were swallowed even while a
+      * connect was pending. */
+ 
++    /* N3DS_AR6014_NO_NETWORK_RETRY: NO_NETWORK_AVAIL is the target reporting
++     * that its own search for this profile came up empty.  With
++     * CONNECT_PROFILE_MATCH_DONE and a single-channel table there is no search
++     * left -- the target only listens on the channel the host handed it -- so
++     * one stale channel hint (the AP moved, the host's BSS entry is older than
++     * the AP's own re-scan, the target was left on another channel by the
++     * preceding 13-channel scan) turns every attempt into a guaranteed
++     * failure: the 2026-10-04 20:03 boot sent byte-identical WMI_CONNECTs to
++     * the 17:40 boot that associated in 56 ms and then reported NO_NETWORK_AVAIL
++     * four times and AUTH_FAILED twice with nothing delivered at all.
++     *
++     * Spend up to N3DS_NO_NETWORK_RETRIES_MAX retries re-submitting the same
++     * command with the channel table handed back to the target (numChannels 0)
++     * and CONNECT_PROFILE_MATCH_DONE cleared, so the target runs its own
++     * profile search across 11g and finds the AP wherever it is.  The supplicant
++     * is still waiting on this connect, so nothing is reported to cfg80211;
++     * only a failed recovery falls through to the normal notification. */
++    /* N3DS_AR6014_SILENT_REASSOC: the target drops a *live* association
++     * 1.5 s after the keys go in (2026-10-04 21:0x: handshake complete at
++     * 81.34 s, NO_NETWORK_AVAIL with a zero BSSID at 82.70 s).  Telling
++     * cfg80211 about that costs a full teardown: the framework drops its
++     * DHCP lease, wpa_supplicant blacklists the BSSID ("Added BSSID
++     * <AP-BSSID> into blacklist") and the whole cycle restarts from a
++     * scan.  The target re-associates happily on a fresh connect, so submit
++     * the same recovery connect as for a pending one and let the upper layers
++     * believe the link is up: the supplicant is told nothing, keeps its keys,
++     * sees the next handshake come through, and DHCP keeps its address.
++     * Bounded, and only while the *target* is the one that left: a
++     * DISCONNECT_CMD (the framework asked) is still reported honestly. */
++    if (reason == NO_NETWORK_AVAIL && ar->smeState == SME_CONNECTED &&
++        n3ds_silent_reassocs < N3DS_SILENT_REASSOC_MAX) {
++        u8 saved_flags = ar->arConnectCtrlFlags;
++
++        n3ds_silent_reassocs++;
++        if (down_interruptible(&ar->arSem) == 0) {
++            status = n3ds_ar6014_set_all_channels(ar);
++            if (status == 0) {
++                ar->arConnectCtrlFlags = saved_flags & ~CONNECT_PROFILE_MATCH_DONE;
++                status = wmi_connect_cmd(ar->arWmi,
++                                         ar->arNetworkType,
++                                         ar->arDot11AuthMode,
++                                         n3ds_last_auth_mode,
++                                         n3ds_last_pair_crypto,
++                                         n3ds_last_pair_len,
++                                         n3ds_last_group_crypto,
++                                         n3ds_last_group_len,
++                                         ar->arSsidLen, ar->arSsid,
++                                         ar->arReqBssid, ar->arChannelHint,
++                                         ar->arConnectCtrlFlags);
++                ar->arConnectCtrlFlags = saved_flags;
++            }
++            up(&ar->arSem);
++        }
++
++        AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
++            ("AR6002 connect: SILENT re-association #%u/%u after target drop, "
++             "status=%d (link stays up for cfg80211)\n",
++             n3ds_silent_reassocs, N3DS_SILENT_REASSOC_MAX, status));
++        if (status == 0) {
++            ar->arConnectPending = true;
++            return;
++        }
++        /* Recovery failed: fall through and report the loss honestly. */
++        n3ds_silent_reassocs = N3DS_SILENT_REASSOC_MAX;
++    } else if (reason != NO_NETWORK_AVAIL) {
++        n3ds_silent_reassocs = 0;
++    }
++
++    if (n3ds_keyvar >= 0 && n3ds_keyvar < N3DS_KEY_VARIANTS) {
++        if (n3ds_keyvar_current != n3ds_keyvar) {
++            n3ds_keyvar_current = n3ds_keyvar;
++            AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
++                ("AR6002 key: pinned variant %d \"%s\"\n",
++                 n3ds_keyvar_current,
++                 n3ds_key_variants[n3ds_keyvar_current].name));
++        }
++    }
++
++    if (reason == NO_NETWORK_AVAIL && ar->smeState == SME_CONNECTING &&
++        n3ds_no_network_retries < N3DS_NO_NETWORK_RETRIES_MAX) {
++        u8 saved_flags = ar->arConnectCtrlFlags;
++
++        n3ds_no_network_retries++;
++        if (down_interruptible(&ar->arSem)) {
++            AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
++                ("AR6002 connect: recovery #%u could not get arSem\n",
++                 n3ds_no_network_retries));
++            return;
++        }
++        status = n3ds_ar6014_set_all_channels(ar);
++        if (status == 0) {
++            ar->arConnectCtrlFlags = saved_flags & ~CONNECT_PROFILE_MATCH_DONE;
++            status = wmi_connect_cmd(ar->arWmi,
++                                     ar->arNetworkType,
++                                     ar->arDot11AuthMode,
++                                     n3ds_last_auth_mode,
++                                     n3ds_last_pair_crypto,
++                                     n3ds_last_pair_len,
++                                     n3ds_last_group_crypto,
++                                     n3ds_last_group_len,
++                                     ar->arSsidLen, ar->arSsid,
++                                     ar->arReqBssid, ar->arChannelHint,
++                                     ar->arConnectCtrlFlags);
++            ar->arConnectCtrlFlags = saved_flags;
++        }
++        up(&ar->arSem);
++
++        AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
++            ("AR6002 connect: recovery #%u/%u full-channel connect "
++             "flags=0x%04x status=%d retries_left=%u\n",
++             n3ds_no_network_retries, N3DS_NO_NETWORK_RETRIES_MAX,
++             (unsigned int)(saved_flags & ~CONNECT_PROFILE_MATCH_DONE),
++             status, n3ds_no_network_retries));
++        if (status == 0) {
++            /* Still connecting: keep the supplicant waiting. */
++            ar->arConnectPending = true;
++            return;
++        }
++    }
++
+     if (reason == DISCONNECT_CMD && ar->arAutoAuthStage &&
+         ar->smeState == SME_CONNECTING &&
+         ar->arDot11AuthMode == OPEN_AUTH) {
+@@ -1216,6 +1548,7 @@
+ void
+ ar6k_cfg80211_scan_node(void *arg, bss_t *ni)
+ {
++    struct cfg80211_bss *bss;
+     struct wiphy *wiphy = (struct wiphy *)arg;
+     u16 size;
+     unsigned char *ieeemgmtbuf = NULL;
+@@ -1279,12 +1612,40 @@
+      * The harvester stores its conservative estimate in signed ni_rssi. */
+     signal = (s32)ni->ni_rssi * 100;
+ 
++    /* N3DS_AR6014_SCAN_CENSUS: print every BSS the target hands up with the
++     * channel it claims and its signal estimate.  A connect attempt that dies
++     * with NO_NETWORK_AVAIL is ambiguous between "we cannot hear the AP" and
++     * "the AP refuses us" (2026-10-04 20:03: identical WMI_CONNECT bytes to
++     * the 17:40 boot that associated in 56 ms, but 1.5 s of nothing and zero
++     * delivered frames), and this line is what separates the two on the next
++     * capture: signal in the -40s means the radio path is fine and the AP is
++     * refusing, -80s or worse means coverage/tuning. */
++    {
++        static atomic_t n3ds_scan_log_left = ATOMIC_INIT(32);
++
++        if (atomic_read(&n3ds_scan_log_left) > 0) {
++            atomic_dec(&n3ds_scan_log_left);
++            AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
++                ("AR6002 scan bss: bssid=%pM freq=%u rssi=%d len=%u\n",
++                 ni->ni_macaddr, (unsigned int)cie->ie_chan,
++                 (int)ni->ni_rssi, (unsigned int)ni->ni_framelen));
++        }
++    }
++
+ 	AR_DEBUG_PRINTF(ATH_DEBUG_INFO,
+ 		("%s: bssid %pM channel %d freq %d size %d\n", __func__,
+ 			mgmt->bssid, channel->hw_value, freq, size));
+-    cfg80211_inform_bss_frame(wiphy, channel, mgmt,
+-                              le16_to_cpu(size),
+-                              signal, GFP_KERNEL);
++    /*
++     * GFP_ATOMIC: this runs under wlan_iterate_nodes()'s node-table lock,
++     * from the SDIO interrupt thread ("BUG: sleeping function called from
++     * invalid context ... cfg80211_inform_single_bss_frame_data" on
++     * hardware, 2026-10-14).  The returned reference is not kept.
++     */
++    bss = cfg80211_inform_bss_frame(wiphy, channel, mgmt,
++                                    le16_to_cpu(size),
++                                    signal, GFP_ATOMIC);
++    if (bss)
++        cfg80211_put_bss(wiphy, bss);
+ 
+     kfree (ieeemgmtbuf);
+ }
+@@ -1532,6 +1893,7 @@
+     struct ar_key *key = NULL;
+     u8 key_usage;
+     u8 key_type;
++    u8 wire_len = 0;
+     int status = 0;
+ 
+     AR_DEBUG_PRINTF(ATH_DEBUG_INFO, ("%s:\n", __func__));
+@@ -1555,10 +1917,31 @@
+     key = &ar->keys[key_index];
+     A_MEMZERO(key, sizeof(struct ar_key));
+ 
+-    if(!mac_addr || is_broadcast_ether_addr(mac_addr)) {
+-        key_usage = GROUP_USAGE;
++    /* a pinned variant applies at once, not only after the next disconnect */
++    if (n3ds_keyvar >= 0 && n3ds_keyvar < N3DS_KEY_VARIANTS)
++        n3ds_keyvar_current = n3ds_keyvar;
++
++    if (pairwise || (mac_addr && !is_broadcast_ether_addr(mac_addr))) {
++        /* N3DS_AR6014_KEY_VARIANT: see the table above -- pairwise_usage is
++         * swept per association. */
++        key_usage = (u8)n3ds_key_variants[n3ds_keyvar_current].pairwise_usage;
++        wire_len = n3ds_key_variants[n3ds_keyvar_current].wire_len;
++        AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
++            ("AR6002 key: variant %d \"%s\" pairwise=1 usage=%u wire=%u\n",
++             n3ds_keyvar_current,
++             n3ds_key_variants[n3ds_keyvar_current].name,
++             key_usage, wire_len));
+     } else {
+-        key_usage = PAIRWISE_USAGE;
++        key_usage = GROUP_USAGE;
++        /* N3DS_AR6014_KEY_VARIANT: the group key follows the same row's wire
++         * format so a variant is a complete description of one install pair
++         * and the next boot's log says which bytes were on the wire. */
++        wire_len = n3ds_key_variants[n3ds_keyvar_current].wire_len;
++        AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
++            ("AR6002 key: variant %d \"%s\" pairwise=0 usage=%u wire=%u\n",
++             n3ds_keyvar_current,
++             n3ds_key_variants[n3ds_keyvar_current].name,
++             key_usage, wire_len));
+     }
+ 
+     if(params) {
+@@ -1604,9 +1987,14 @@
+                     key_usage, key->seq_len));
+ 
+     ar->arDefTxKeyIndex = key_index;
+-    status = wmi_addKey_cmd(ar->arWmi, ar->arDefTxKeyIndex, key_type, key_usage,
++    /* N3DS_AR6014_NWM_KEY_MACADDR: Nintendo's own ADD_CIPHER_KEY template
++     * leaves key_macaddr all-zero ("mac=zero" in the AR6002 key log); the
++     * cfg80211/wext pairwise mac_addr was set to the AP BSSID, which the
++     * AR6014 target also rejects.  Hand wmi_addKey_cmd NULL so the field
++     * stays zeroed, exactly like NWM. */
++    status = wmi_addKey_cmd_ex(ar->arWmi, ar->arDefTxKeyIndex, key_type, key_usage,
+                     key->key_len, key->seq, key->key, KEY_OP_INIT_VAL,
+-                    (u8 *)mac_addr, SYNC_BOTH_WMIFLAG);
++                    NULL, SYNC_BOTH_WMIFLAG, wire_len);
+ 
+ 
+     if (status) {
+diff -ruN a/wmi/wmi.c b/wmi/wmi.c
+--- a/wmi/wmi.c	2026-10-23 20:22:23.746587554 +0800
++++ b/wmi/wmi.c	2026-10-13 14:58:11.259205423 +0800
+@@ -2132,8 +2132,8 @@
+     why = (ev->errorCode <= INTERNAL_ERROR) ? reason[ev->errorCode]
+                                             : "unrecognized code";
+     AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
+-        ("AR6002 WMI CMDERROR: cmd=0x%04x (%u) errorCode=%u (%s)\n",
+-         ev->commandId, ev->commandId, ev->errorCode, why));
++        ("AR6002 WMI CMDERROR: cmd=0x%04x (%u) errorCode=%u (%s) raw=%*ph\n",
++         ev->commandId, ev->commandId, ev->errorCode, why, len, datap));
+ 
+     return 0;
+ }
+@@ -3202,10 +3202,10 @@
+ }
+ 
+ int
+-wmi_addKey_cmd(struct wmi_t *wmip, u8 keyIndex, CRYPTO_TYPE keyType,
+-               u8 keyUsage, u8 keyLength, u8 *keyRSC,
+-               u8 *keyMaterial, u8 key_op_ctrl, u8 *macAddr,
+-               WMI_SYNC_FLAG sync_flag)
++wmi_addKey_cmd_ex(struct wmi_t *wmip, u8 keyIndex, CRYPTO_TYPE keyType,
++                  u8 keyUsage, u8 keyLength, u8 *keyRSC,
++                  u8 *keyMaterial, u8 key_op_ctrl, u8 *macAddr,
++                  WMI_SYNC_FLAG sync_flag, u8 wire_len)
+ {
+     void *osbuf;
+     WMI_ADD_CIPHER_KEY_CMD *cmd;
+@@ -3225,19 +3225,47 @@
+         return A_NO_MEMORY;
+     }
+ 
+-    A_NETBUF_PUT(osbuf, sizeof(*cmd));
++    /* N3DS_AR6014_KEY_WIRE_LEN: 45 (2Dh) stops the message right after
++     * key_op_ctrl, the form GBATEK documents for the DSi ("on DSi it's 2Dh"),
++     * with no key_macaddr at all; 51 (33h) is the full NWM template.  The
++     * buffer is always allocated for the whole struct, so the shorter form is
++     * just a shorter command on the wire. */
++    if (wire_len == 0 || wire_len > sizeof(*cmd)) {
++        wire_len = sizeof(*cmd);
++    }
++
++    A_NETBUF_PUT(osbuf, wire_len);
+ 
+     cmd = (WMI_ADD_CIPHER_KEY_CMD *)(A_NETBUF_DATA(osbuf));
+     A_MEMZERO(cmd, sizeof(*cmd));
+     cmd->keyIndex = keyIndex;
+-    /* N3DS_AR6014_NWM_AES_KEY_TYPE: NWM 0x001191e8 submits a 16-byte
+-     * temporal key with wire keyType 4.  The legacy host enum calls AES 8. */
++    /* N3DS_AR6014_NWM_KEY_TYPE: Nintendo's NWM firmware uses its own
++     * wire CRYPTO_TYPE numbering -- NONE=1, WEP=2, TKIP=3, AES=4 -- as
++     * decoded from the NWM 0x001191e8 temporal-key path (keyType=4 for a
++     * 16-byte CCMP key) and from the DSi host's KEY_TYPE_* constants
++     * (KEY_TYPE_TKIP=3, KEY_TYPE_AES=4).  This host header's legacy enum
++     * is NONE=1, WEP=2, TKIP=4, AES=8, so every type except AES/TKIP was
++     * already correct and AES was mapped by hand.  The old one-case remap
++     * left a group TKIP key (host 4) going out as wire type 4 (AES) with a
++     * 32-byte body, which the AR6014 target rejected with
++     * WMI_CMDERROR errorCode=2 (illegal state) -- exactly the observed
++     * 4-way-handshake failure.  Translate all four types. */
+     {
+-        u8 nwm_key_type = (keyType == AES_CRYPT) ? 4 : keyType;
++        u8 nwm_key_type;
++
++        switch (keyType) {
++        case NONE_CRYPT: nwm_key_type = 1; break;
++        case WEP_CRYPT:  nwm_key_type = 2; break;
++        case TKIP_CRYPT: nwm_key_type = 3; break;
++        case AES_CRYPT:  nwm_key_type = 4; break;
++        default:         nwm_key_type = (u8)keyType; break;
++        }
+         cmd->keyType  = nwm_key_type;
+         AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
+-            ("AR6002 key: NWM type host=%u target=%u usage=%u len=%u\n",
+-             keyType, nwm_key_type, keyUsage, keyLength));
++            ("AR6002 key: NWM idx=%u type host=%u target=%u usage=%u "
++             "len=%u mac=%s\n",
++             keyIndex, keyType, nwm_key_type, keyUsage, keyLength,
++             macAddr ? "set" : "zero"));
+     }
+     cmd->keyUsage = keyUsage;
+     cmd->keyLength = keyLength;
+@@ -3258,6 +3286,18 @@
+     return (wmi_cmd_send(wmip, osbuf, WMI_ADD_CIPHER_KEY_CMDID, sync_flag));
+ }
+ 
++/* N3DS_AR6014_KEY_WIRE_LEN: the other eleven callers keep the full template. */
++int
++wmi_addKey_cmd(struct wmi_t *wmip, u8 keyIndex, CRYPTO_TYPE keyType,
++               u8 keyUsage, u8 keyLength, u8 *keyRSC,
++               u8 *keyMaterial, u8 key_op_ctrl, u8 *macAddr,
++               WMI_SYNC_FLAG sync_flag)
++{
++    return wmi_addKey_cmd_ex(wmip, keyIndex, keyType, keyUsage, keyLength,
++                             keyRSC, keyMaterial, key_op_ctrl, macAddr,
++                             sync_flag, 0);
++}
++
+ int
+ wmi_add_krk_cmd(struct wmi_t *wmip, u8 *krk)
+ {

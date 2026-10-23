@@ -20,7 +20,7 @@ import tempfile
 import time
 from t3ds import *
 
-cfg = read(KERNEL / "drivers/staging/ath6k_legacy/os/linux/cfg80211.c")
+cfg = read(ath6k_driver() / "os/linux/cfg80211.c")
 check("#define N3DS_KEYVAR_DEFAULT 2" in cfg, "default key variant is not 2")
 check("static int n3ds_keyvar = N3DS_KEYVAR_DEFAULT;" in cfg, "n3ds_keyvar does not default to the pin")
 check("static int n3ds_keyvar_current = N3DS_KEYVAR_DEFAULT;" in cfg,

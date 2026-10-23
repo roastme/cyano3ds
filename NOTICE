@@ -28,8 +28,8 @@ Third-party code keeps its upstream license:
 
   linux-3ds (kernel, firm_linux_loader, arm9linuxfw)   GPL-2.0
   CyanogenMod and the Android Open Source Project      Apache-2.0
-  port/kernel/drivers/staging/ath6k_legacy/            Atheros permissive
-                                                       license (see the file
+  drivers/staging/ath6k_legacy/ (fetched at build      Atheros permissive
+  time, see docs/WIFI.md)                              license (see the file
                                                        headers)
 
 Credits
@@ -44,7 +44,9 @@ Credits
   on it and reuses, adapted to this kernel and userspace:
 
     - the pre-mainline staging AR6K Wi-Fi driver and its Nintendo NWM firmware
-      boot path (port/kernel/drivers/staging/ath6k_legacy/),
+      boot path (fetched from Octoblimp at a pinned commit by
+      port/scripts/fix-wifi-octoblimp.py; Cyano3DS's changes to it are in
+      port/kernel/patches/ath6k_legacy-cyano3ds.patch),
     - the AR6002 SDIO host-controller changes
       (port/kernel/drivers/platform/nintendo3ds/ctr_sdhc.c),
     - the resistive-touchscreen driver
