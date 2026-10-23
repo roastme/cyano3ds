@@ -7,13 +7,22 @@ payload on top of the linux-3ds kernel.
 Licensing
 ---------
 
-Cyano3DS's own files (the top-level files, docs/, port/scripts/,
-port/userland/, port/initramfs/, port/gm9/ and the kernel source under
-port/kernel/) are licensed under the Apache License, Version 2.0; see LICENSE.
-A file that states a different license keeps it.
+Cyano3DS is licensed per file.  The full texts are in COPYING (GPL-2.0) and
+LICENSE (Apache-2.0).
 
-Kernel code, including the code that port/scripts/*.py and port/scripts/*.sh
-write into the kernel tree, is GPL-2.0, as the Linux kernel is.
+Kernel code under port/kernel/ is GPL-2.0, as the Linux kernel is.  So is the
+code that port/scripts/*.py and port/scripts/*.sh write into the kernel tree.
+
+Everything else that is the project's own (the top-level files, docs/,
+port/scripts/, port/userland/, port/initramfs/, port/gm9/) is licensed under
+the Apache License, Version 2.0.
+
+A file that states a different license keeps it.  The exceptions are:
+
+  port/userland/tests/*.c, port/userland/storage/fakevold.c   GPL-2.0
+  port/kernel/drivers/platform/nintendo3ds/ctr_sdhc.h         GPL-2.0
+  port/kernel/drivers/platform/nintendo3ds/ctr_sdhc.c         GPL-2.0-or-later
+  port/kernel/drivers/platform/nintendo3ds/tsc/touch.c        GPL-2.0-or-later
 
 Third-party code keeps its upstream license:
 
@@ -22,8 +31,6 @@ Third-party code keeps its upstream license:
   port/kernel/drivers/staging/ath6k_legacy/            Atheros permissive
                                                        license (see the file
                                                        headers)
-  port/kernel/drivers/platform/nintendo3ds/ctr_sdhc.*  GPL-2.0 (linux-3ds)
-  port/kernel/drivers/platform/nintendo3ds/tsc/*       GPL-2.0
 
 Credits
 -------

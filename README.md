@@ -124,8 +124,9 @@ everything that ships.
 
 ## Credits and license
 
-Cyano3DS's own files are licensed under the Apache License 2.0; kernel code is
-GPL-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Kernel code (port/kernel/) is GPL-2.0; the rest of Cyano3DS is Apache License
+2.0, except files that state another license. See [COPYING](COPYING),
+[LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 It builds on:
 
