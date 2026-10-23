@@ -58,7 +58,7 @@ Credits
 * CyanogenMod and the Android Open Source Project — the userspace.
 
 * The AR6014G Wi-Fi firmware is not shipped.  Each builder dumps it from their
-  own console's NWM and carves it with port/scripts/nwm-to-ath6k.py; see the
+  own console's NWM and carves it with port/scripts/nwm-extract.py; see the
   "Wi-Fi" section of docs/WIFI.md.
 
 Android is a trademark of Google LLC.  Nintendo 3DS is a trademark of Nintendo.

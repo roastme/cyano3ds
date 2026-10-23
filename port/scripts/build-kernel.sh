@@ -149,7 +149,7 @@ scripts/config --enable  DETECT_HUNG_TASK          \
 # hung-task report, no softlockup report, every SD writer stopped at once).
 # lockdep found the cause: pxi_txrx() in ctr_pxi.c slept (might_sleep/mutex/
 # wait_event) while the block layer called it from ->queue_rq under
-# rcu_read_lock.  That is fixed by fix-pxi-atomic-sleep.py (step 9/9).
+# rcu_read_lock.  That is fixed by fix-pxi-notify-defer.py (step 9/9).
 #
 # The options below are kept for future bring-up (they are very useful and
 # found this bug immediately), but they make the already-slow 3DS boot ~3-4x

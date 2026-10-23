@@ -2127,8 +2127,8 @@ if [ -x /bin/android-init ] && [ -f /init.rc ] && [ -n "$SDDEV" ]; then
 				# lib/<abi>/*.so from a system APK, so a game's .so has to live in
 				# /system/lib or it dies with UnsatisfiedLinkError.
 				#
-				# This also carries an optional patched libEGL.so (see
-				# port/scripts/make-egl-preload.sh) whose only change is a DT_NEEDED
+				# This also carries an optional patched libEGL.so (built
+				# outside this tree) whose only change is a DT_NEEDED
 				# on libagl.so.  Copying it here makes zygote map libagl (and
 				# libpixelflinger) at their prelinked addresses before an app's own
 				# library can take them - which is what lets the software-GLES games

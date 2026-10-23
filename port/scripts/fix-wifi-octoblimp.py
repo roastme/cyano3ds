@@ -3,19 +3,12 @@
 fix-wifi-octoblimp.py - install the Octoblimp/Android3DS (AOSP Eclair) WiFi
 stack into the Cyano3DS kernel tree.
 
-WHY THIS REPLACES fix-wifi.py + fix-ath6kl*.py
-----------------------------------------------
-The Cyano3DS port drove the 3DS Atheros AR6014G with mainline cfg80211 ath6kl,
-teaching it the "hw2" AR6002 family and Nintendo's NWM firmware piece by
-piece.  That path reached a registered card and an uploaded firmware but never
-a working station.
-
-The Octoblimp port instead resurrected the pre-mainline **staging ath6k**
-driver (the Atheros "AR6K" codebase, removed from the kernel around 3.2),
-ported it to cfg80211 + WEXT, and taught it to boot the AR6014 directly from
-Nintendo's own NWM blobs (`ath6k/AR6002/nwm/{stub_data,stub_code,main_type4,
-database}.bin`) instead of the SDK `.z77` images.  That is the driver this
-script installs, together with Octoblimp's SDIO host changes in ctr_sdhc.c
+This script installs Octoblimp's port, which resurrected the pre-mainline
+**staging ath6k** driver (the Atheros "AR6K" codebase, removed from the
+kernel around 3.2), ported it to cfg80211 + WEXT, and taught it to boot the
+AR6014 directly from Nintendo's own NWM blobs (`ath6k/AR6002/nwm/{stub_data,
+stub_code,main_type4,database}.bin`) instead of the SDK `.z77` images.  It is
+installed together with Octoblimp's SDIO host changes in ctr_sdhc.c
 (AR6002 PIO edge fix, card-IRQ timer fallback, wifi_recover sysfs).
 
 The driver is built in and probes at boot with the defaults Octoblimp used:

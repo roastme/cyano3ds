@@ -257,8 +257,6 @@ only Wi-Fi is missing.
    ```
 
    They are installed at `/lib/firmware/ath6k/AR6002/nwm/` in the initramfs.
-   (`port/scripts/nwm-to-ath6k.py` is a separate converter that produces the
-   SDK-style `ath6k/AR6014/` set instead; it is not needed for this step.)
 
 The details, including which NWM revision is needed, are in
 [docs/WIFI.md](WIFI.md).

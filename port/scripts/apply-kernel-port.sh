@@ -302,14 +302,6 @@ python3 "$PORT/scripts/fix-cgroup-sched-perm.py" "$KD"
 # ---------------------------------------------------------------------------
 say "6/8  kernel: bring-up debug instrumentation"
 # ---------------------------------------------------------------------------
-# The ashmem / open()-failure / may_open() instrumentation was essential while
-# tracking down the "/ is 0700" and device-permission bugs, but it logs on
-# every ashmem open and floods the (very slow) fbcon console.  Off for now;
-# the scripts are idempotent, so re-enable by uncommenting.
-# python3 "$PORT/scripts/add-ashmem-debug.py" "$KD"
-# python3 "$PORT/scripts/add-open-debug.py" "$KD"
-# python3 "$PORT/scripts/add-mayopen-debug.py" "$KD"
-
 # ---------------------------------------------------------------------------
 say "7/8  kernel: MCU power-off (short power-button press)"
 # ---------------------------------------------------------------------------
@@ -360,10 +352,9 @@ python3 "$PORT/scripts/fix-tsc-speaker-clock.py" "$KD"
 
 # The whole touchscreen driver is now Octoblimp's, vendored verbatim in
 # port/kernel/.  This port used to patch the inherited linux-3ds touch.c into a
-# dedicated evdev touchscreen (fix-tsc-touchscreen.py) and then layer an
-# eight-way mapping (fix-tsc-touch-map.py), an affine calibration
-# (fix-tsc-touch-cal.py) and a FIFO median + touch-slop filter
-# (fix-tsc-touch-filter.py) on top.  It still felt wrong at the edges, while
+# dedicated evdev touchscreen and layer an eight-way mapping, an affine
+# calibration and a FIFO median + touch-slop filter on top.  It still felt
+# wrong at the edges, while
 # Octoblimp's driver on the identical panel feels right.  That driver medians
 # the FIFO's five samples, anchors a contact to its DOWN position, reports the
 # newest sample at 60 Hz, registers the panel as INPUT_PROP_DIRECT, and moves
@@ -413,8 +404,7 @@ python3 "$PORT/scripts/fix-mcu-home-button.py" "$KD"
 
 # The legacy status bar TrackingView is touch-modal over the top ~19 px, so a
 # touch there expands the shade and the shade then swallows input.  This port
-# used to drop touches that start in that strip (fix-tsc-statusbar-drop.py,
-# now removed); that is DISABLED now because
+# does not drop touches that start in that strip; that is DISABLED now because
 # touch works and the status bar should be usable (the DISABLE_EXPAND helper
 # and the CLOSE_SYSTEM_DIALOGS broadcast are gone too).
 

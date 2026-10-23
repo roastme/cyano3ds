@@ -114,9 +114,7 @@ The port has no NAND driver, so the console itself cannot read the module:
    Stub.code `0x316`, Database `0x1E8` — validate the detected code base).
    This writes `stub_data.bin`, `stub_code.bin`, `database.bin` and
    `main_type1/4/5.bin` (plus `blocks.json`) into a `<name>.code.blocks/`
-   directory. (`port/scripts/nwm-to-ath6k.py` is a separate converter that
-   produces the SDK-style `ath6k/AR6014/` set instead; it is not needed
-   here.)
+   directory.
 3. Copy the four files the driver needs into `firmware/ath6k/AR6002/nwm/`
    (or point `NWM_DIR` at a directory holding them): `stub_data.bin`,
    `stub_code.bin`, `main_type4.bin` and `database.bin`, keeping
@@ -249,8 +247,3 @@ the useful evidence is:
   `N3DS-DHCP: traffic check: ...`.
 * Scan results were reported with `GFP_KERNEL` under the node-table lock
   (`BUG: sleeping function called from invalid context`); now `GFP_ATOMIC`.
-
-*Historical note:* `port/scripts/fix-wifi.py`, `fix-ath6kl.py` and
-`fix-ath6kl-diag.py` belong to an earlier attempt that extended mainline
-`ath6kl` with the AR6002 family.  They are kept for reference but are **not**
-run by `apply-kernel-port.sh`; do not extend them.
