@@ -7,8 +7,7 @@ WHY THIS EXISTS
 The 15 s tmpfs->SD flusher (and every Linux SD writer) wedges on the
 ARM11/PXI/MMC write path under framework load.  Once it stalls, all card logs
 stop at once and everything after that is trapped in tmpfs and lost when the
-console is powered off - so we cannot tell whether Android ever reaches the
-launcher or composites a frame.
+console is powered off - so the log of what led up to a hang is gone.
 
 The ARM9 is an independent CPU and owns the SD controller.  This patch makes it
 poll a 4 KiB page in ARM11 DRAM (whose physical address it is told once, via a

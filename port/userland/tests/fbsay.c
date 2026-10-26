@@ -2,8 +2,8 @@
 /*
  * fbsay.c - display text on a framebuffer, for consoles with no keyboard
  *
- * Bring-up tool for the Cyano3DS port.  The 3DS has no
- * serial port, no keyboard and no network in Linux yet, so when something goes
+ * Bring-up tool for the Cyano3DS port.  The 3DS has no serial port and no
+ * keyboard, and Wi-Fi only comes up late in the boot, so when something goes
  * wrong during boot the only channel is the pair of LCDs: one is the kernel
  * console (fb0, top screen) and the other is the display this port drives
  * (fb1, bottom screen).
@@ -170,10 +170,9 @@ int main(int argc, char **argv)
 	back = cur ? buf0 : buf1;
 
 	/*
-	 * Geometry first: the input has to be wrapped at the real column count.
-	 * (The first version hard-wrapped at 78 characters and then clipped at
-	 * `cols` when drawing, so every line was cut off around 20 characters -
-	 * which is exactly how the on-screen log hid the ashmem failure reason.)
+	 * Geometry first: the input has to be wrapped at the real column count;
+	 * wrapping at a fixed width and clipping at `cols` when drawing would
+	 * cut every line off around 20 characters.
 	 */
 	cols = W / (8 * scale);
 	text_rows = H / (8 * scale) - 1;	/* one row for the page indicator */

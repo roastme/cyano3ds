@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
-"""Lid sleep must hold on real hardware (2026-10-14 fix).
+"""Lid sleep holds on real hardware.
 
-The first real-console boot slept and woke ~20 ms later, every 0.7 s, with
-wake reason "MCU": the MCU's LCD/backlight acknowledgement interrupts
-(bits 24-29), which the kernel never masks, arrived after pm.c's last GPIO
-check.  ctr_lid.c now masks every MCU interrupt but "shell opened" for the
-duration of the sleep, clears what is pending, and restores the mask on
-resume.  It also runs the /data save hook before sleeping and no longer gives
-up when a suspend is refused.
+The MCU acknowledges LCD/backlight changes with interrupts (bits 24-29) that
+the kernel never masks; they arrive after pm.c's last GPIO check and wake the
+console ~20 ms into every sleep (wake reason "MCU").  ctr_lid.c masks every
+MCU interrupt but "shell opened" for the duration of the sleep, clears what
+is pending, and restores the mask on resume.  It also runs the /data save
+hook before sleeping and keeps trying when a suspend is refused.
 
-Later the same day the first sleep that really reached PDN power-down on
-hardware never came back (dark, power LED in sleep, forced power-off).  The
-default is now a screen-off sleep: backlights off, CPU in WFI with the TWD
-as heartbeat, woken by reading the MCU line; PDN sleep is ctr_deep_sleep=1.
-And the Wi-Fi driver's suspend cut the AR6014's power, timed out on SDIO and
-left Wi-Fi dead, so the chip is now kept powered (MMC_PM_KEEP_POWER).
+A sleep that reaches PDN power-down does not come back on hardware, so the
+default is a screen-off sleep: backlights off, CPU in WFI with the TWD as
+heartbeat, woken by reading the MCU line; PDN sleep is ctr_deep_sleep=1.
+The AR6014 stays powered through sleep (MMC_PM_KEEP_POWER): cutting its
+power makes SDIO time out and leaves Wi-Fi dead.
 """
 import hashlib
 import shutil
@@ -50,7 +48,7 @@ check(order(light, "TWD_CTRL_EN | TWD_CTRL_AUTO_RELOAD | TWD_CTRL_IRQ_EN",
       "screen-off sleep: no TWD heartbeat, or the MCU line is not polled after each WFI")
 check("PDN_CNT" not in light and "ctr_gfx_sleep" not in light, "screen-off sleep touches PDN/graphics")
 
-hif = read(KERNEL / "drivers/staging/ath6k_legacy/hif/sdio/linux_sdio/src/hif.c")
+hif = read(ath6k_driver() / "hif/sdio/linux_sdio/src/hif.c")
 check(order(hif, "static int ath6kl_hifdev_suspend", "MMC_PM_KEEP_POWER",
             "sdio_set_host_pm_flags(func, MMC_PM_KEEP_POWER)", "return 0;", "deviceSuspendHandler"),
       "Wi-Fi suspend does not keep the chip powered before the power-cut path")
@@ -61,7 +59,7 @@ check("mmc->pm_caps |= MMC_PM_KEEP_POWER;" in sdhc, "3ds-sdhc does not offer MMC
 check(order(sdhc, "static int ctr_sdhc_pm_resume", "ctr_sdhc_reset(host);",
             "__ctr_sdhc_set_ios(host->mmc, &host->mmc->ios);", "ctr_sdhc_sdio_arm(host, true);"),
       "3ds-sdhc resume does not restore clock/bus width and the SDIO poll")
-cfg = read(KERNEL / "drivers/staging/ath6k_legacy/os/linux/cfg80211.c")
+cfg = read(ath6k_driver() / "os/linux/cfg80211.c")
 scan = cfg[cfg.index("ar6k_cfg80211_scan_node(void *arg, bss_t *ni)"):]
 scan = scan[:scan.index("\n}\n")]
 check("signal, GFP_ATOMIC);" in scan and "GFP_KERNEL" not in scan,

@@ -5,10 +5,9 @@
  * Android's liblog writes every message to /dev/log/main, /dev/log/events or
  * /dev/log/radio, and logcat reads them back.  The driver was removed from
  * mainline (and from the Android common kernel) long ago, and without it the
- * Android userspace's logs vanish silently - which made debugging the port's
- * first Android boot impossible: the kernel log showed nothing between "mounted
- * /system" and the hang, because the interesting messages were all going into a
- * device that did not exist.
+ * Android userspace's logs vanish silently: the kernel log shows nothing
+ * between "mounted /system" and a hang, because the interesting messages all
+ * go into a device that does not exist.
  *
  * This is a from-scratch implementation of the same ABI, not a backport:
  *
@@ -52,9 +51,9 @@
 
 /*
  * The classic (2009) misc names are log_main/log_events/log_radio.  Android's
- * init special-cases "log_" to put them under /dev/log/, which is what
- * liblog opens; names containing '/' (as an earlier version of this driver
- * used) make init create /dev/main et al. and skip the log permissions.
+ * init special-cases "log_" to put them under /dev/log/, which is what liblog
+ * opens; names containing '/' make init create /dev/main et al. and skip the
+ * log permissions.
  */
 #define LOGGER_LOG_MAIN		"log_main"
 #define LOGGER_LOG_EVENTS	"log_events"
@@ -133,13 +132,13 @@ static ssize_t logger_write_iter(struct kiocb *iocb, struct iov_iter *from)
 
 	/*
 	 * Classic 2009 logger ABI: userspace writes ONLY the payload, i.e.
-	 * [priority][tag NUL][text], and the kernel fills in the
-	 * logger_entry header.  Android's liblog __android_log_write() writev()s
-	 * exactly three iovecs (prio, tag, msg) and no header - an earlier
-	 * version of this driver skipped 20 bytes here, which silently chopped
-	 * the first 20 bytes off every Android log line.  Anything beyond
-	 * LOGGER_ENTRY_MAX_PAYLOAD is truncated, but the whole write must
-	 * still be consumed or liblog would retry into a half-read iov_iter.
+	 * [priority][tag NUL][text], and the kernel fills in the logger_entry
+	 * header.  Android's liblog __android_log_write() writev()s exactly
+	 * three iovecs (prio, tag, msg) and no header; skipping a header here
+	 * would chop the first 20 bytes off every Android log line.  Anything
+	 * beyond LOGGER_ENTRY_MAX_PAYLOAD is truncated, but the whole write
+	 * must still be consumed or liblog would retry into a half-read
+	 * iov_iter.
 	 */
 	if (copy_from_iter(p + hdrlen, payload, from) != payload) {
 		ret = -EFAULT;

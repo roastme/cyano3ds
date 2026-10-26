@@ -2,11 +2,10 @@
 # build-cm7-source.sh - assemble the CyanogenMod 7.2 (Android 2.3.7, API 10)
 #                       Nintendo 3DS userspace from a CM7.2 *source build*.
 #
-# This is the source-build counterpart of legacy/build-cm7.sh (which repackages a stock
-# cm-7.2.0-cooper.zip): this script builds CM7.2 from source for
-# `device/nintendo3ds` (see port/scripts/apply-cm7-device.sh and docs/CM7.md),
-# and this script takes the build's `out/target/product/nintendo3ds/` tree and
-# turns it into the SD-card artifacts:
+# CM7.2 is built from source for `device/nintendo3ds` (see
+# port/scripts/apply-cm7-device.sh and docs/CM7.md); this script takes the
+# build's `out/target/product/nintendo3ds/` tree and turns it into the SD-card
+# artifacts:
 #
 #   1. drop the generic-only graphics leftovers (there should be no Adreno
 #      blobs in a source build, but delete egl.cfg so libEGL uses the default
@@ -17,8 +16,8 @@
 #      patched init.rc) for mkinitramfs.sh ANDROID_FLAVOR=cm7.
 #
 # Usage:
-#   CM7_DIR=/root/p3ds/cm7 bash port/scripts/build-cm7-source.sh
-#   CM7_DIR=/root/p3ds/cm7 bash port/scripts/build-cm7-source.sh --from-image
+#   CM7_DIR=~/p3ds/cm7 bash port/scripts/build-cm7-source.sh
+#   CM7_DIR=~/p3ds/cm7 bash port/scripts/build-cm7-source.sh --from-image
 #
 # --from-image uses out/android/system.img (already built), otherwise the
 # tree out/target/product/nintendo3ds/system/ is used.

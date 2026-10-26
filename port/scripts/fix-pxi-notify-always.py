@@ -102,8 +102,8 @@ NEW_NOTIFY = """static bool vpxi_notify(struct virtqueue *vq)
 	/*
 	 * ALWAYS defer.  pxi_txrx() sleeps, this is reached from the block
 	 * layer's ->queue_rq (sometimes under a spinlock), and the
-	 * in_atomic()/irqs_disabled() probe used to be wrong about the
-	 * context - the kernel logged "sleeping function called from invalid
+	 * in_atomic()/irqs_disabled() probe gets the context wrong - the
+	 * kernel logs "sleeping function called from invalid
 	 * context" from kworker/0:2H in blk_mq_run_work_fn on real hardware.
 	 * The workqueue runs in process context, where sleeping is legal.
 	 */

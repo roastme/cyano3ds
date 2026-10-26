@@ -1,11 +1,11 @@
-# PortHelper - bring-up helper (runs as root via app_process)
+# PortHelper - keep-awake and keyguard helper (runs as root via app_process)
 #
 # This helper does two things:
 #
 #   1. Dismiss the keyguard.  The PhoneWindowManager refuses HOME while
 #      KeyguardViewMediator reports the keyguard showing, and on this port the
 #      lock screen is never drawn but can still be "showing", so the physical
-#      Home button appeared dead.  IWindowManager.disableKeyguard() clears it
+#      Home button would be dead.  IWindowManager.disableKeyguard() clears it
 #      and the normal framework HOME handling takes over from there - this
 #      helper does not launch anything itself.
 #      (Needs DISABLE_KEYGUARD; this helper runs as root.)

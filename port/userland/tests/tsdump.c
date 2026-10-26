@@ -2,10 +2,10 @@
 /*
  * tsdump.c - dump raw evdev events from a 3DS input device to a log
  *
- * Bring-up tool for the M4 touchscreen work.  Android's EventHub classifies
- * the dedicated "Nintendo 3DS touchscreen" input device as CLASS_TOUCHSCREEN
- * (see KeyInputQueue: "X: min=0 max=319 ..."), but tapping the panel did
- * nothing.  This dumps the raw input_event stream so a single boot answers the
+ * Diagnostic tool (diagnostic boots only).  Android's EventHub classifies the
+ * dedicated "Nintendo 3DS touchscreen" input device as CLASS_TOUCHSCREEN (see
+ * KeyInputQueue: "X: min=0 max=319 ...").  When tapping the panel does
+ * nothing, this dumps the raw input_event stream so a single boot answers the
  * question the kernel log cannot: is the input core delivering ABS_X/ABS_Y +
  * BTN_TOUCH/SYN_REPORT to userspace at all?
  *

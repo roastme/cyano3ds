@@ -3,22 +3,21 @@
 fix-mcu-home-button.py - give the physical Home button its own evdev.
 
 The 3DS MCU reports the power, home and wireless buttons on one `gpio-keys`
-node, so the kernel creates a single input device for all three.  The bring-up
+node, so the kernel creates a single input device for all three.  The
 `powerkey` daemon finds the device that can emit KEY_POWER and `EVIOCGRAB`s it
 (exclusive open) so it reliably sees a short power press -- which means
-Android's EventHub can no longer read that device, and the **Home button never
+Android's EventHub cannot read that device, and the **Home button never
 reaches the framework**.
 
 Split the node in two: the power button keeps its own device (grabbed by
 powerkey), while home + wireless land on a second device Android can read.
 
 The Home button is mapped to **KEY_HOME**: Android treats it as "go to the
-launcher" (leave the running app and show the home screen), which is what the
-user asked for.  The MENU key now lives on **ZL** (see ctr_extrapad.c), so the
-physical Home button is free to be HOME again.
+launcher" (leave the running app and show the home screen).  MENU is on the
+L button (see fix-buttons.py).
 
-Idempotent, and it will convert an already-split tree from KEY_MENU to
-KEY_HOME.
+Idempotent, and it converts an already-split tree that maps Home to KEY_MENU
+to KEY_HOME.
 """
 
 import pathlib

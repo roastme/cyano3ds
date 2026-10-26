@@ -847,7 +847,7 @@ int CameraHardwareN3ds::previewThread()
              cam, st.frames, st.short_frames, st.overruns, st.last_gap_bytes, st.p1);
         /*
          * N3DS_CAMERA_KEEP_LAST_FRAME: one late frame (a dropped frame, an
-         * overrun restart) used to wipe the picture for a status screen and
+         * overrun restart) must not wipe the picture for a status screen and
          * flash it back a second later. Keep the last picture on screen
          * until the stream has really stalled: 6 s, or no frame yet.
          */

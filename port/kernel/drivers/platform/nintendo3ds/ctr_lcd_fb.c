@@ -191,9 +191,8 @@ static inline void lcd_putpx(struct ctr_fb *f, void __iomem *buf,
  * panel through ctr_blit_rot(), i.e. through the same transposition that all
  * userspace drawing (fbtest, fbsay, and later Android) goes through.
  *
- * An earlier version painted straight into the VRAM scanout buffer, which
- * bypasses the transpose - so a broken transpose was invisible until
- * userspace drew something, and looked like "garbage with letters in it".
+ * Painting straight into the VRAM scanout buffer would bypass the transpose,
+ * so a broken transpose would stay invisible until userspace drew something.
  *
  * Expected result on the panel (see docs/DISPLAY.md):
  *   - four VERTICAL bands, left to right: red, green, blue, white
@@ -261,10 +260,10 @@ static unsigned int ctr_wait_max_us;
 static unsigned int ctr_blit_max_us;
 
 /*
- * The bring-up liveness/watchdog/capture timers are OFF by default now that
- * the port is usable.  They do a kallsyms lookup in the timer softirq every
- * 500 ms and paint a square on the top screen; enable with
- * ctr_lcd_fb.debug=1 on the kernel command line, or build the marker.
+ * The bring-up liveness/watchdog/capture timers are OFF by default.  They do a
+ * kallsyms lookup in the timer softirq every 500 ms and paint a square on the
+ * top screen; enable with ctr_lcd_fb.debug=1 on the kernel command line, or
+ * build the marker.
  */
 static bool ctr_debug;
 module_param_named(debug, ctr_debug, bool, 0444);
@@ -299,7 +298,7 @@ static void ctr_lcd_wait_for_current(struct ctr_fb *f, unsigned int idx)
 	 * flips (on this hardware PDC_SELECT_CURRENT lags the written selection by
 	 * about a frame), so bound it by time instead of a loop count: just over
 	 * one panel frame is enough for the latch, and a bit that never matches
-	 * can no longer stall a flip for more than that.
+	 * cannot stall a flip for more than that.
 	 */
 	ktime_t deadline = ktime_add_ms(ktime_get(), 20);
 
@@ -926,15 +925,14 @@ static void ctr_diag_write_file(const char *text, size_t len)
  * The 15 s tmpfs->SD flusher (and every other Linux SD writer) wedges on the
  * ARM11/PXI/MMC write path under framework load.  Once it does, every card log
  * stops at once and everything after that is trapped in tmpfs and lost when the
- * console is powered off, so we cannot see whether Android reaches the launcher
- * or composites a frame.
+ * console is powered off, so the log of what led up to a hang is gone.
  *
  * The ARM9 is an independent CPU and owns the SD controller.  This driver keeps
  * the latest ctr-diag text in a 4 KiB page of DRAM and hands the ARM9 the
  * page's physical address once, over an otherwise-unused PXI manager register.
  * The ARM9 then polls the page and mirrors it to a rotating set of sectors in
  * the preallocated /mnt/sd/CYANO3DS/arm9cap.bin - with no Linux block layer
- * involved, so a wedged Linux SD writer can no longer blind us.
+ * involved, so a wedged Linux SD writer cannot hide the log.
  *
  * The struct layout must match port/arm9linuxfw/capture.h exactly.
  */
@@ -1128,11 +1126,11 @@ static void ctr_cap_ring(char *base, u32 size, u32 *lenp, const char *s,
 /*
  * Android log mirror, straight from the kernel logger driver.
  *
- * The tmpfs logdump file + ctr-diag kthread used to feed this page, but that
- * kthread can block when the SD/tmpfs path wedges - exactly when we need the
- * log most.  The logger driver calls ctr_cap_log_append() in the writer's own
- * context, so every Android line is captured independently of tmpfs, the
- * flusher and the kthread; the timer publishes the ring into the page.
+ * Feeding this page from a tmpfs file through a kthread would block when the
+ * SD/tmpfs path wedges - exactly when the log is needed most.  The logger
+ * driver calls ctr_cap_log_append() in the writer's own context, so every
+ * Android line is captured independently of tmpfs, the flusher and the
+ * kthread; the timer publishes the ring into the page.
  */
 static DEFINE_SPINLOCK(ctr_log_lock);
 static char ctr_log_buf[8192];

@@ -245,8 +245,8 @@ static void ctr_pdn_mclk(bool enable)
  * This is the analog output sequence of Android3DS/Octoblimp's ctr_csnd.c
  * codec_init(), a one-for-one port of Aurora3DS's Audio11.c (itself from
  * profi200's libn3ds codec.c), which is verified to produce sound on this
- * hardware.  The order of the writes is load-bearing.  Compared with this
- * driver's earlier sequence it does no second (CTR) soft reset, uploads no EQ
+ * hardware.  The order of the writes is load-bearing.  It does no second
+ * (CTR) soft reset, uploads no EQ
  * coefficients, does not touch p100.49/p100.123, runs I2S line 2 at
  * 32.73 kHz and uses Octoblimp's speaker/headphone gains.
  */
@@ -745,7 +745,7 @@ static int ctr_snd_pcm_trigger(struct snd_pcm_substream *ss, int cmd)
  * pattern.
  *
  * A wall-clock pointer is still far better than advancing a counter in the
- * timer callback (as an earlier revision did): the callback is re-armed with
+ * timer callback: the callback is re-armed with
  * hrtimer_forward_now(), so every late expiry permanently pushes the counter
  * behind the hardware and the application then overwrites audio the CSND has
  * not played yet -- clicks, repeats and an apparently "skipping" stream.
@@ -878,12 +878,12 @@ static snd_pcm_uframes_t ctr_snd_pcm_pointer(struct snd_pcm_substream *ss)
 
 	/*
 	 * Report where the CSND really reads once st_addr is known to work.
-	 * The wall clock is only an estimate of it, and on hardware (2026-10-14)
-	 * it was off by up to 131 frames at every stream start and drifted
-	 * 26 frames/s (the CSND ran at 44126 Hz for 44100): with the hardware
-	 * behind the clock pointer, Android kept overwriting samples the CSND
-	 * had not played yet -- glitchy, crackling audio.  The measured rate is
-	 * right to within 0.1%, so following st_addr does not slow anything.
+	 * The wall clock is only an estimate of it: on hardware it is off by
+	 * up to 131 frames at every stream start and drifts 26 frames/s (the
+	 * CSND runs at 44126 Hz for 44100), and with the hardware behind the
+	 * clock pointer, Android overwrites samples the CSND has not played
+	 * yet -- glitchy, crackling audio.  The measured rate is right to
+	 * within 0.1%, so following st_addr does not slow anything.
 	 */
 	snd->pos = snd->hw_live ? hw : sw;
 	return snd->pos;
@@ -1713,9 +1713,9 @@ static int ctr_snd_probe(struct platform_device *pdev)
 
 	dev_info(dev, "registered ALSA card (CSND/I2S2 playback, MIC capture, no DSP firmware needed)\n");
 
-	/* The boot-time test tone (ctr_snd_test_tone) is kept compiled in
-	 * for bring-up but is no longer played: it was loud and surprising.
-	 * Re-enable by calling ctr_snd_test_tone(snd) here. */
+	/* The boot-time test tone (ctr_snd_test_tone) is compiled in for
+	 * debugging but not played: it is loud and surprising.  Call
+	 * ctr_snd_test_tone(snd) here to hear it. */
 
 	return 0;
 

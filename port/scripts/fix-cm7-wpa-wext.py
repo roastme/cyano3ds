@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # fix-cm7-wpa-wext.py - make CyanogenMod 7.2's wpa_supplicant_6 "wext" driver
-#                       work with a *plain cfg80211* driver (mainline ath6kl on
-#                       the Nintendo 3DS AR6014G).
+#                       work with a driver that has no TI-style private
+#                       ioctls (the Nintendo 3DS AR6014G's cfg80211 + WEXT
+#                       driver).
 #
-# Symptom this fixes (observed 2026-10-01, card boot with kernel v10):
+# Symptom without it:
 #
 #     wpa_supplicant: ioctl[SIOCSIWPRIV] (cscan): -1
 #     wpa_supplicant: Failed to initiate AP scan.
@@ -19,7 +20,7 @@
 # Two separate bugs, both in CM7's Android-flavoured driver_wext.c:
 #
 #   1. COMBO SCAN.  CM7's WEXT driver defaults to the TI/AR6k vendor "combo
-#      scan" (SIOCSIWPRIV "cscan"), which a mainline cfg80211 driver does not
+#      scan" (SIOCSIWPRIV "cscan"), which a cfg80211 driver does not
 #      implement, so every scan fails.  The AOSP/CM build knob
 #      BOARD_WEXT_NO_COMBO_SCAN=true makes it use the standard
 #      SIOCSIWSCAN/SIOCGIWSCAN path, which cfg80211's wext-compat *does*
@@ -51,7 +52,7 @@
 # to the CM6 tree with those names substituted (detected automatically).
 #
 # Usage:
-#   python3 port/scripts/fix-cm7-wpa-wext.py [CM7_DIR]   # default /root/p3ds/cm7
+#   python3 port/scripts/fix-cm7-wpa-wext.py [CM7_DIR]   # default ~/p3ds/cm7
 #   python3 port/scripts/fix-cm7-wpa-wext.py CM6_DIR     # CyanogenMod 6 tree
 #
 # Idempotent: safe to run repeatedly.

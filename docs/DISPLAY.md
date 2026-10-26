@@ -144,9 +144,9 @@ screen specifically (px/line = 240), not just inferred from the top screen.
 Both are self-consistent (stride = px/line x bytes/px), but a driver that
 changes the format mid-flight is changing something the bootloader owns; the
 port's driver therefore reads the format/stride/timing and adapts to *them*.
-3. It also explains why the first build produced garbage on the bottom screen:
-it wrote a 16bpp format and a 320-scanline value into registers that the
-bootloader had set up as 24bpp/402, i.e. it re-timed a live panel.
+3. A driver that writes a 16bpp format and a 320-scanline value into
+registers the bootloader set up as 24bpp/402 re-times a live panel, and the
+bottom screen shows garbage.
 
 ## 3. The mapping, derived
 
@@ -233,13 +233,12 @@ Consequences:
 
 ## 5. Register values the driver programs
 
-**Update (after the first hardware boot and after reading Luma3DS):** the
-driver no longer *writes* a chosen format/stride.  Luma3DS - the reference
-implementation that works on every 3DS - configures the bottom screen as
-**24bpp stored BGR, stride 720 (240 px/line), 320 scanlines**
+The driver does not *write* a format or stride of its own.  Luma3DS - the
+reference implementation that works on every 3DS - configures the bottom
+screen as **24bpp stored BGR, stride 720 (240 px/line), 320 scanlines**
 (`arm11/source/main.c`, `initScreens()`: `0x10400570 = 0x80301`,
 `0x10400590 = 0x2D0`, and `SCREEN_BOTTOM_FBSIZE = 3 * 320 * 240`), so the
-port's driver now *reads* those registers, derives the scanout geometry from
+port's driver *reads* those registers, derives the scanout geometry from
 them (`px/line` from HDisp, bytes/pixel from stride/px-per-line) and writes
 **only** the two buffer addresses and the select bit.  The panel timing is
 owned by the bootloader and must never be touched - rewriting the pixel

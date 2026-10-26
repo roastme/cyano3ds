@@ -25,7 +25,7 @@
 # backend can drive ath6kl.  See BoardConfig.mk and device_nintendo3ds.mk.
 #
 # Usage:
-#   python3 port/scripts/fix-cm7-wifi.py [CM7_DIR]     # default /root/p3ds/cm7
+#   python3 port/scripts/fix-cm7-wifi.py [CM7_DIR]     # default ~/p3ds/cm7
 #
 # Idempotent: safe to run repeatedly.
 

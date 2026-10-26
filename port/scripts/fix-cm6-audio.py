@@ -214,7 +214,7 @@ def main():
             PCM_CODE + "\n// ----------------------------------------------------------------------------\n\nAudioHardwareGeneric::AudioHardwareGeneric()",
             "constructor")
 
-    # the hardware object no longer opens /dev/eac
+    # the hardware object does not open /dev/eac
     s = sub(s, "    mFd = ::open(kAudioDeviceName, O_RDWR);\n",
             "    mFd = -1;   // %s streams open the ALSA PCM themselves\n" % MARK, "ctor body")
     s = sub(s, """    if (mFd >= 0) {

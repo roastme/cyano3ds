@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Top-screen console log (2026-10-14), after Octoblimp's logcat_console.sh:
+"""Top-screen console log, after Octoblimp's logcat_console.sh:
 a second logger reader mirrors Android's log to /dev/tty0, warnings and up by
-default (fbcon draws rotated glyphs in software; Octoblimp traced a freeze to
-a verbose mirror), level from CYANO3DS/console-log, off with
+default (fbcon draws rotated glyphs in software, and a verbose mirror can
+freeze the console), level from CYANO3DS/console-log, off with
 CYANO3DS/noconsolelog."""
 from t3ds import *
 

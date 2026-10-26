@@ -2,19 +2,19 @@
 /*
  * logwrap.c - run a command and report how it terminated through /dev/kmsg
  *
- * Bring-up only.  Android's init restarts a service whose process exits, but
- * it sends the service's stdout/stderr to /dev/null and logs nothing useful.
- * Zygote was exiting part-way through preloadClasses with no exception in
- * logcat, no new tombstone and no kernel signal message, so this wrapper:
+ * A debugging aid.  Android's init restarts a service whose process exits,
+ * but it sends the service's stdout/stderr to /dev/null and logs nothing
+ * useful, so a service that dies with no exception in logcat, no tombstone
+ * and no kernel signal message leaves no trace.  This wrapper:
  *   - keeps the child's stdout/stderr in a *tmpfs* file that a flusher copies
  *     to the SD card (see below),
  *   - logs "exited with status N" or "killed by signal N" to /dev/kmsg.
  *
- * The stderr sink used to be /mnt/sd/CYANO3DS/service-stderr.log directly.
- * That made every wrapped service (zygote, servicemanager, media) share a
- * blocking dependency on the SD write path: if the card wedged, the first
- * message they printed blocked them.  Writing to tmpfs instead keeps the
- * services running and a bounded flusher in /init mirrors the file to the SD.
+ * Writing straight to the SD card would give every wrapped service (zygote,
+ * servicemanager, media) a blocking dependency on the SD write path: if the
+ * card wedged, the first message they printed would block them.  Writing to
+ * tmpfs keeps the services running, and a bounded flusher in /init mirrors
+ * the file to the SD.
  *
  * Usage (from init.rc):  service zygote /bin/logwrap /system/bin/app_process ...
  */

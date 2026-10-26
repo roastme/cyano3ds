@@ -4,8 +4,8 @@
 The 3DS MCU powers the console down when bit 0 of register 0x20 is set; the
 device tree already models that as the "Power off" regulator
 (poweroff-regulator@20, off = <0x01>), but nothing installs a power-off
-handler, so reboot(RB_POWER_OFF) just halted the CPU (the user saw
-"System halted") and the button still had to be held until the MCU cut power.
+handler, so reboot(RB_POWER_OFF) would just halt the CPU ("System halted")
+and the button would still have to be held until the MCU cuts power.
 
 Two changes:
   * drivers/platform/nintendo3ds/mcu/regulator.c: a regulator node marked

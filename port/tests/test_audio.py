@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Audio (2026-10-14): Octoblimp's codec sequence, output re-arm, microphone.
+"""Audio: Octoblimp's codec sequence, output re-arm, microphone.
 
-ctr_snd.c keeps its ALSA interface (CM7's audio HAL is alsa_sound) but now
+ctr_snd.c keeps its ALSA interface (CM7's audio HAL is alsa_sound) but
 programs the hardware the way Android3DS/Octoblimp's ctr_csnd.c does, which
 is verified to make sound on a real console: their codec bring-up (no second
 reset, no EQ upload, both I2S lines at 32.73 kHz), their output-stage
@@ -47,9 +47,9 @@ mk = read(SCRIPTS / "mkinitramfs.sh")
 check('-o "$ROOT/bin/pcmtest" "$PORT/userland/tests/pcmtest.c" -lm' in mk, "pcmtest not built into the initramfs")
 
 # pcmtest compiles for the host too (same raw ioctls)
-# Playback pointer (2026-10-14 "audio was glitchy"): the wall-clock pointer
-# was up to 131 frames ahead of the CSND's real read position at every stream
-# start and drifted 26 frames/s, so Android overwrote unplayed samples.
+# Playback pointer: the wall-clock estimate is up to 131 frames ahead of the
+# CSND's real read position at every stream start and drifts 26 frames/s, so
+# Android would overwrite unplayed samples (glitchy audio).
 ptr = snd[snd.index("static snd_pcm_uframes_t ctr_snd_pcm_pointer"):snd.index("static int ctr_snd_copy_user")]
 check("snd->pos = snd->hw_live ? hw : sw;" in ptr, "pointer does not follow the live CSND position")
 check(order(ptr, "snd->hw_moved = now;", "ktime_ms_delta(ktime_get(), snd->hw_moved) > 100",

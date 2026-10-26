@@ -9,8 +9,7 @@
 #
 # Usage: mksd.sh [out-dir] [--with-android]
 #   <out-dir>        default: <repo>/out/sd
-#   --with-android   also create android/system.img and android/data.img
-#                    (empty ext4 images for now; M3 fills /system)
+#   --with-android   also copy android/system.img and android/data.img
 #
 # Resulting layout on the SD card:
 #
@@ -40,7 +39,7 @@ for a in "$@"; do
 	esac
 done
 OUT="${OUT:-$REPO/out/sd}"
-# The first argument is the destination, never the build dir (C-18).
+# The first argument is the destination, never the build dir.
 if [ "$(realpath -m "$OUT")" = "$(realpath -m "$DIST")" ]; then
 	echo "mksd.sh: destination '$OUT' is the build output dir ($DIST)." >&2
 	echo "         Pass another directory, or omit it to use $REPO/out/sd." >&2

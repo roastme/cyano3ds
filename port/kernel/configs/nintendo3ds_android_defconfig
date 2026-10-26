@@ -6,8 +6,9 @@ CONFIG_BSD_PROCESS_ACCT=y
 CONFIG_BSD_PROCESS_ACCT_V3=y
 CONFIG_LOG_BUF_SHIFT=18
 # Android's init mounts the cpu and cpuacct cgroups (foreground/background CPU
-# shares); MEMCG used to pull CGROUPS in implicitly.  memcg, blk-cgroup and CFS
-# bandwidth control are not used and cost CPU on every allocation/IO/enqueue.
+# shares), so CGROUPS is set explicitly rather than through MEMCG.  memcg,
+# blk-cgroup and CFS bandwidth control are not used and cost CPU on every
+# allocation/IO/enqueue.
 CONFIG_CGROUPS=y
 # CONFIG_MEMCG is not set
 # CONFIG_BLK_CGROUP is not set

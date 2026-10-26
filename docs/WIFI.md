@@ -1,9 +1,9 @@
 # Wi-Fi on the Nintendo 3DS (Atheros AR6014G on SDIO)
 
-**Goal: working Wi-Fi in Android (CM7.2).**  Wi-Fi is the part of this port
-that still needs the most bring-up work, and almost everything about it is
-undocumented upstream.  This document describes how the AR6014G is powered,
-driven and fed its firmware.
+Wi-Fi works in Android (CM7.2): the console joins open and WPA/WPA2-Personal
+networks, gets a DHCP lease and hands it to Android.  Almost everything about
+the chip is undocumented upstream, so this document describes how the
+AR6014G is powered, driven and fed its firmware.
 
 ## 1. The hardware
 
@@ -34,8 +34,7 @@ driven and fed its firmware.
   it low, so the chip is dark and the SDIO bus enumerates nothing until the
   driver asserts it.  GPIO4 is a direction-less output-only port; `bgpio`'s
   `bgpio_simple_dir_out` handles it, so the ordinary gpiolib consumer API
-  works.  An early linux-3ds attempt to bring up this chip never even saw a
-  card because this GPIO was not touched.
+  works.
 
 ## 2. The driver: the pre-mainline staging AR6K ("ath6k_legacy")
 
@@ -47,8 +46,15 @@ This port uses the staging driver as resurrected and cfg80211/WEXT-ported by
 the Octoblimp/Android3DS project.  `port/scripts/fix-wifi-octoblimp.py`
 (called by `apply-kernel-port.sh`) installs it:
 
-* `port/kernel/drivers/staging/ath6k_legacy/` — the driver
-  (`CONFIG_ATH6K_LEGACY`, built into `zImage`);
+* `drivers/staging/ath6k_legacy/` — the driver (`CONFIG_ATH6K_LEGACY`, built
+  into `zImage`). It is **not** vendored in this repository. The script
+  fetches Octoblimp's `patches/linux.diff` at the commit pinned as `OCTO_SHA`,
+  extracts the `ath6k_legacy` files from it, and applies
+  `port/kernel/patches/ath6k_legacy-cyano3ds.patch` (Cyano3DS's changes:
+  cfg80211 and HIF fixes, keep-power suspend, calibration). Needs network
+  access to github.com during `apply-kernel-port.sh`. To change the driver,
+  edit the patch: extract the base the same way, edit a copy, and regenerate
+  the patch with `diff -ruN a b` so the paths are `a/...` and `b/...`;
 * `port/kernel/drivers/platform/nintendo3ds/ctr_sdhc.{c,h}` — Octoblimp's SDIO
   host changes (AR6002 PIO edge fix, card-IRQ timer fallback, `wifi_recover`
   sysfs) *plus* the Wi-Fi power handling: it requests the `wifi-enable` GPIO,
@@ -107,9 +113,7 @@ The port has no NAND driver, so the console itself cannot read the module:
    Stub.code `0x316`, Database `0x1E8` — validate the detected code base).
    This writes `stub_data.bin`, `stub_code.bin`, `database.bin` and
    `main_type1/4/5.bin` (plus `blocks.json`) into a `<name>.code.blocks/`
-   directory. (`port/scripts/nwm-to-ath6k.py` is a separate converter that
-   produces the SDK-style `ath6k/AR6014/` set instead; it is not needed
-   here.)
+   directory.
 3. Copy the four files the driver needs into `firmware/ath6k/AR6002/nwm/`
    (or point `NWM_DIR` at a directory holding them): `stub_data.bin`,
    `stub_code.bin`, `main_type4.bin` and `database.bin`, keeping
@@ -117,8 +121,8 @@ The port has no NAND driver, so the console itself cannot read the module:
    Main image: newer Type1 revisions hang (see GBATEK NWM). They are
    installed into the initramfs at `/lib/firmware/ath6k/AR6002/nwm/`.
 
-See [BUILD.md](BUILD.md#firmware).  Cyano3DS ships none of this: it is
-Nintendo firmware, dumped from your own console.
+See [BUILD.md](BUILD.md#7-firmware-optional--wi-fi-only).  Cyano3DS ships
+none of this: it is Nintendo firmware, dumped from your own console.
 
 ## 4. How the AR6014 boots: memory map and upload order
 
@@ -182,20 +186,41 @@ HAL to treat an existing `wlan0` as "driver loaded" (no insmod/rmmod), and
 The supplicant and `dhcpcd` configs ship with the device tree
 (`port/userland/device/nintendo3ds/wifi/`).
 
-## 7. Status and what to look at
+## 7. Behaviour worth knowing
 
-**Verified working:** Wi-Fi power GPIO → SDIO enumeration (`mmc0: new SDIO
-card`, `vendor=0x0271 device=0x0201`), target identification
-(`ver=0x2300006f type=0x2`), the NWM carve → convert → initramfs pipeline,
-and a full BMI upload of Stub + Type4 Main + Database.  **Not yet working:
-station mode** — association is the open item, which is why the README lists
-Wi-Fi as "still being brought up".
+* **Key format.**  The AR6014 firmware accepts several `WMI_ADD_CIPHER_KEY`
+  layouts but only one keeps the link: the 45-byte form with PTK usage 0 and
+  GTK usage 1, which is what the DSi library dsiwifi sends.  The others
+  associate and then lose the AP about 1.5 s after the keys go in.  The driver
+  uses the working form (`n3ds_keyvar=2`); `n3ds_keyvar=-1` cycles through
+  the formats, one per association, for debugging.
+* **DHCP hand-off.**  `/bin/dhcpcd_wlan0.sh` publishes the lease to Android
+  (`dhcp.wlan0.*`) from dhcpcd's own DHCPACK file
+  (`/data/misc/dhcp/dhcpcd-wlan0.lease`), not from the interface: the default
+  route appears a second before dhcpcd writes the lease, so the interface
+  alone gives `mask=0.0.0.0` and no DNS.  A stale lease restored with `/data`
+  is deleted before dhcpcd starts, and the script falls back to the interface
+  (netmask from the subnet route) after 10 s.  After the hand-off it pings the
+  gateway and logs `N3DS-DHCP: traffic check: ...`.  `port/tests/test_wifi.py`
+  runs it against a stub dhcpcd.
+* **Sleep.**  The chip stays powered through lid sleep (`MMC_PM_KEEP_POWER`;
+  the HIF suspend/resume do nothing, and 3ds-sdhc restores its clock, bus
+  width and SDIO poll on resume).  Cutting its power makes the SDIO reset time
+  out (`AR6002 SDHC request timeout`, `Failed to reset target`), and every
+  later scan fails with `Wmi not ready`.
+* **Scan results** are reported with `GFP_ATOMIC`, because they are delivered
+  under the node-table lock.
+
+## 8. Debugging
 
 The initramfs boot log contains a `--- wifi (SDIO Atheros AR6014G) ---` block
 (`/sys/class/mmc_host`, `/sys/bus/sdio/devices/*` vendor/device/class, the
 matching dmesg lines, and which NWM files were found).  On a failed bring-up
 the useful evidence is:
 
+* `request firmware failed ath6k/AR6002/nwm/stub_data.bin` — the initramfs has
+  no NWM firmware; the four blobs must be in `firmware/ath6k/AR6002/nwm/` (or
+  `NWM_DIR`) when `mkinitramfs.sh` runs;
 * `wifi-enable` GPIO / reset lines from `3ds-sdhc` — did the chip power up at
   all;
 * `new SDIO card` + target info — did BMI answer;
@@ -208,42 +233,3 @@ the useful evidence is:
   ready";
 * `cfg80211: regulatory.db` load errors — harmless here (no userhelper), the
   chip is single-domain 2.4 GHz anyway.
-
-**2026-10-14:**
-
-* The card built on 2026-10-13 had no NWM firmware in its initramfs
-  (`request firmware failed ath6k/AR6002/nwm/stub_data.bin`). The four blobs
-  must be in `firmware/ath6k/AR6002/nwm/` when `mkinitramfs.sh` runs.
-* The driver used to sweep four `WMI_ADD_CIPHER_KEY` formats, one per
-  association, starting with two that lose the AP about 1.5 s after the keys go
-  in. In the 2026-10-04 hardware log, row 2, `dsi-45-u0`, kept the link up for
-  minutes and delivered decrypted traffic, including a DHCP offer addressed to
-  the console. That row is the 45-byte form with PTK usage 0 and GTK usage 1,
-  exactly what the DSi library dsiwifi sends.
-* It is now the default (`n3ds_keyvar=2`; `-1` brings the sweep back).
-* The first hardware boot with the firmware and the pin (2026-10-14 morning)
-  associated, finished the 4-way handshake and got a DHCP lease
-  (`192.168.0.38/24`). Android still had no network: `/bin/dhcpcd_wlan0.sh`
-  published `mask=0.0.0.0` and no `dhcp.wlan0.dns1`, because it took the
-  netmask from the default route, a second before dhcpcd wrote the lease. The
-  publisher now reads dhcpcd's own DHCPACK file
-  (`/data/misc/dhcp/dhcpcd-wlan0.lease`), deletes the stale one restored with
-  `/data` before it starts, and only falls back to the interface after 10 s
-  (netmask from the subnet route). `port/tests/test_wifi.py` runs it against a
-  stub dhcpcd.
-* Later that day the hand-off worked (Android: `netmask 255.255.255.0 dns1
-  192.168.0.1`), but the first lid close killed Wi-Fi for the rest of the boot.
-  The driver's suspend cut the AR6014's power, its SDIO reset timed out
-  (`AR6002 SDHC request timeout`, `Failed to reset target`) and the suspend was
-  refused; afterwards every scan failed with `Wmi not ready`. The chip is now
-  kept powered through sleep (`MMC_PM_KEEP_POWER`: the HIF suspend/resume do
-  nothing, and 3ds-sdhc restores its clock, bus width and SDIO poll on resume).
-  The DHCP script also pings the gateway after the hand-off and logs
-  `N3DS-DHCP: traffic check: ...`.
-* Scan results were reported with `GFP_KERNEL` under the node-table lock
-  (`BUG: sleeping function called from invalid context`); now `GFP_ATOMIC`.
-
-*Historical note:* `port/scripts/fix-wifi.py`, `fix-ath6kl.py` and
-`fix-ath6kl-diag.py` belong to an earlier attempt that extended mainline
-`ath6kl` with the AR6002 family.  They are kept for reference but are **not**
-run by `apply-kernel-port.sh`; do not extend them.

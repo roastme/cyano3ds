@@ -30,7 +30,7 @@
  * The masking matters on real hardware: the MCU acknowledges LCD power and
  * backlight changes with interrupts (bits 24-29), a little after the write.
  * The kernel's MCU interrupt controller does not know those bits, so they stay
- * unmasked; they used to arrive after the last check in pm.c and wake the
+ * unmasked; they arrive after the last check in pm.c and would wake the
  * console a few milliseconds into every sleep (wake reason "MCU", one
  * sleep/wake cycle every ~0.7 s while the lid was closed).  The emulator never
  * raises them.  open_agb_firm avoids this the same way: its MCU mask leaves

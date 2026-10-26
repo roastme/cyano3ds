@@ -7,7 +7,7 @@
 # Lists every missing tool for the requested stages at once, with the apt
 # package that provides it on Ubuntu 24.04 / Mint 22, then exits non-zero.  The
 # build scripts call this first, so a missing tool is reported before any clone
-# or compile starts (complaints C-1, C-4, C-11).
+# or compile starts.
 
 set -uo pipefail
 
@@ -35,7 +35,7 @@ check_kernel() {
 	need_cmd dtc device-tree-compiler
 	[ -f /usr/include/openssl/ssl.h ] || missing+=("openssl headers (apt: libssl-dev)")
 	# A cross-gcc that cannot name its own include directory makes the kernel
-	# build fail with a confusing <linux/types.h> error (C-10).
+	# build fail with a confusing <linux/types.h> error.
 	if command -v arm-linux-gnueabi-gcc >/dev/null 2>&1; then
 		inc="$(arm-linux-gnueabi-gcc -print-file-name=include 2>/dev/null)"
 		case "$inc" in
@@ -61,7 +61,7 @@ check_initramfs() {
 	local arch
 	arch="$(uname -m)"
 	# The armel busybox and the test binaries in the initramfs are ARM programs.
-	# On an x86 host they must run under qemu-arm-static (C-17).
+	# On an x86 host they must run under qemu-arm-static.
 	case "$arch" in
 		arm*|aarch64) ;;
 		*) need_cmd qemu-arm-static qemu-user-static ;;

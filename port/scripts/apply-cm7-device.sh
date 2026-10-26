@@ -9,7 +9,7 @@
 #
 # Usage:
 #   bash port/scripts/apply-cm7-device.sh [CM7_DIR]
-#   CM7_DIR=/root/p3ds/cm7 bash port/scripts/apply-cm7-device.sh
+#   CM7_DIR=~/p3ds/cm7 bash port/scripts/apply-cm7-device.sh
 
 set -euo pipefail
 

@@ -54,7 +54,7 @@ BOARD_HAVE_GPS              := false
 # --- Wi-Fi ------------------------------------------------------------------
 # Atheros AR6014G (AR6002/hw2 family) on the second SDIO controller, driven by
 # the *in-kernel* mainline ath6kl.  The Nintendo NWM firmware is uploaded by
-# port/scripts/fix-ath6kl.py's AR6002 path and installed in the initramfs at
+# the Wi-Fi driver and installed in the initramfs at
 # /lib/firmware/ath6k/AR6014/, so there is no loadable module: libhardware_
 # legacy's wifi.c would insmod /system/lib/modules/... and fail.  The port
 # patches it (port/scripts/fix-cm7-wifi.py) to treat an existing wlan0 netdev

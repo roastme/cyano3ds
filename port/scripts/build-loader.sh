@@ -90,7 +90,7 @@ bash "$PORT/scripts/apply-arm9linuxfw-port.sh" "$SRC/arm9linuxfw"
 make -C "$SRC/arm9linuxfw" clean >/dev/null 2>&1 \
 	|| echo "    (make clean failed; continuing with the existing objects)"
 make -C "$SRC/arm9linuxfw"
-# Fail loudly: a missing file here used to leave the script reporting success.
+# Fail loudly: a missing file here must not leave the script reporting success.
 FW_BIN="$(find "$SRC/arm9linuxfw" -maxdepth 2 -name 'arm9linuxfw*.bin' | head -n1)"
 [ -n "$FW_BIN" ] || die "no arm9linuxfw*.bin under $SRC/arm9linuxfw"
 cp "$FW_BIN" "$OUT/arm9linuxfw.bin"
