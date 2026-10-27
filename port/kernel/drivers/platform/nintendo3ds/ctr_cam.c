@@ -607,7 +607,6 @@ static void ctr_cam_reset_framing(struct ctr_cam *cam)
 	cam->pos = 0;
 	cam->since_gap = 0;
 	cam->need_gap = true;
-	cam->consec_overruns = 0;
 	cam->last_data_ns = ktime_get_ns();
 }
 
@@ -775,6 +774,10 @@ static int ctr_cam_thread(void *data)
 	 * thread spins instead. It only spins for the frame's active lines.
 	 */
 	bool spin = cam->frame_bytes > CAM_QVGA_BYTES;
+	/* Diagnostics, logged and reset with each 10 s report. */
+	u64 pass_ns = 0, max_pass_gap = 0, max_drain = 0;
+	u32 passes = 0;
+	u16 overrun_stat = 0;
 
 	/*
 	 * #314 ran at sched_set_fifo_low(), where every other RT thread
@@ -786,17 +789,27 @@ static int ctr_cam_thread(void *data)
 	while (!kthread_should_stop()) {
 		u16 stat = readw_relaxed(p->regs + CAM_STAT);
 		unsigned int n = stat & CAM_STAT_FILL;
-		u64 now;
+		u64 now, pass_start = ktime_get_ns();
+
+		/* Longest time between passes: the thread was not running. */
+		if (passes)
+			max_pass_gap = max_t(u64, max_pass_gap, pass_start - pass_ns);
+		pass_ns = pass_start;
+		passes++;
 
 		if (stat & CAM_STAT_OVERRUN) {
+			overrun_stat = stat;
 			ctr_cam_overrun(cam, p);
 			continue;
 		}
 
 		if (n) {
+			u64 drain_start = ktime_get_ns();
+
 			if (n > cam->stats.max_fifo)
 				cam->stats.max_fifo = n;
 			ctr_cam_drain(cam, p, n);
+			max_drain = max_t(u64, max_drain, ktime_get_ns() - drain_start);
 			cam->last_data_ns = ktime_get_ns();
 			if (!seen_data) {
 				seen_data = true;
@@ -843,11 +856,23 @@ static int ctr_cam_thread(void *data)
 				 cam->stats.last_gap_bytes, cam->frame_bytes,
 				 cam->stats.max_fifo, cam->p1, ae_index,
 				 ae_max_index, ae_gain, a.err);
+			dev_info(cam->dev,
+				 "%s: diag: %u passes in 10 s, longest pass gap %llu us, longest drain %llu us, last overrun STAT %04x\n",
+				 s->name, passes,
+				 div_u64(max_pass_gap, NSEC_PER_USEC),
+				 div_u64(max_drain, NSEC_PER_USEC), overrun_stat);
+			passes = 0;
+			max_pass_gap = 0;
+			max_drain = 0;
 			frames_at_report = frames;
 			next_report = ktime_get_ns() + CAM_REPORT_NS;
 		}
 
-		usleep_range(100, 200);
+		/*
+		 * Not usleep_range(): without high-res timers a sleep is a whole
+		 * tick (10 ms at HZ=100), longer than the FIFO takes to overrun.
+		 */
+		udelay(50);
 	}
 	return 0;
 }
@@ -940,6 +965,8 @@ static int ctr_cam_stream_start(struct ctr_cam *cam,
 	cam->streaming = true;
 	spin_unlock(&cam->buf_lock);
 
+	/* A new stream starts with no overrun streak; ctr_cam_overrun() counts it. */
+	cam->consec_overruns = 0;
 	ctr_cam_reset_framing(cam);
 	ctr_cam_port_start(cam, &cam->port[s->port]);
 

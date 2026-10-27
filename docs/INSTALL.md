@@ -111,7 +111,9 @@ system: power off, power on holding **HOME**, and pick the slot that points at
 Drop an APK into `CYANO3DS/` on the card and reboot. The boot stage:
 
 1. binds every `CYANO3DS/*.apk` over `/system/app/NAME.apk`;
-2. extracts the APK's own bundled `lib/armeabi/*.so` into `/system/lib`;
+2. extracts the APK's own bundled `lib/armeabi/*.so` onto the card
+   (`android/apklib/NAME/`) and bind-mounts them into `/system/lib`, so the
+   libraries take no RAM;
 3. pre-optimises the app so it is ready when the launcher lists it.
 
 A separate `.so` on the card is not needed (a card `.so` still overrides the

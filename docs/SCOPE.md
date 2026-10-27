@@ -37,7 +37,7 @@ only have the experimental CyanogenMod 6 build; see [CM6.md](CM6.md).
 
 ## Camera
 
-The camera works, but CM7 builds its stub camera HAL; the working HAL is built
+CM7 builds its stub camera HAL; the working HAL is built
 separately and installed from the card. See [CM7.md](CM7.md#camera).
 
 ## Android version ceiling

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Cameras: Octoblimp's driver + their HAL moved to Gingerbread.
 
-  * kernel: ctr_cam.c is Android3DS/Octoblimp's file, unchanged; the DT node
-    and Kconfig come from add-ctr-cam.py;
+  * kernel: ctr_cam.c is Android3DS/Octoblimp's file plus the per-pass and
+    drain timing diagnostics in ctr_cam_thread(); the DT node and Kconfig
+    come from add-ctr-cam.py;
   * userspace: CM7's CameraService.cpp rebuilt with CameraHardwareN3ds (their
     HAL) instead of the stub: RGB565 preview (libagl shows NV21 grey), a
     takePicture() that does not join the preview thread under CameraService's
@@ -14,9 +15,9 @@ import hashlib
 from t3ds import *
 
 cam = KERNEL / "drivers/platform/nintendo3ds/ctr_cam.c"
-OCTOBLIMP_SHA256 = "260d2803f504d9b365b1d19c24fcdd952fad7250c0fdaa7e9320da06bd0a3b1d"
-check(hashlib.sha256(cam.read_bytes()).hexdigest() == OCTOBLIMP_SHA256,
-      "ctr_cam.c differs from the Octoblimp file it was copied from")
+PINNED_SHA256 = "6d1ac73c39c90297ac49e3baa10b37ae82ab89930e406fd75f8e6a33bae196e4"
+check(hashlib.sha256(cam.read_bytes()).hexdigest() == PINNED_SHA256,
+      "ctr_cam.c changed: update PINNED_SHA256 here after reviewing the driver")
 s = read(SCRIPTS / "add-ctr-cam.py")
 for needle in ['compatible = "nintendo,3ds-cam"', "nintendo,i2c-bus = <&i2c1>, <&i2c2>;",
                "<0x10320000 0x1000>", "<0x10321000 0x1000>", "obj-$(CONFIG_CTR_CAM) += ctr_cam.o"]:

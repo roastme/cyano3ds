@@ -2077,9 +2077,9 @@ if [ -x /bin/android-init ] && [ -f /init.rc ] && [ -n "$SDDEV" ]; then
 				# CYANO3DS/*.apk into /system/app so PackageManager installs
 				# it and the root pre-dexopt below optimizes it.  (Boot keeps the
 				# card's .apk files; only *.log/*.txt/*.bin are rotated away.)
-				for apk in /mnt/sd/CYANO3DS/*.apk; do
+				for apk in /mnt/sd/CYANO3DS/*.[aA][pP][kK]; do
 					[ -f "$apk" ] || continue
-					bn=$(basename "$apk")
+					bn=$(basename "$apk"); bn=${bn%.*}.apk	# PackageManager scans *.apk only
 					sz=$(stat -c %s "$apk" 2>/dev/null || echo 0)
 					# /system is a tmpfs whose default limit is half of RAM
 					# (~120 MiB) and the base image already uses ~60 MiB, so
@@ -2195,9 +2195,9 @@ if [ -x /bin/android-init ] && [ -f /init.rc ] && [ -n "$SDDEV" ]; then
 							cp -f "$f" "/system/app/$bn" 2>/dev/null
 					fi
 				done
-				for apk in /mnt/sd/CYANO3DS/*.apk; do
+				for apk in /mnt/sd/CYANO3DS/*.[aA][pP][kK]; do
 					[ -f "$apk" ] || continue
-					bn=$(basename "$apk")
+					bn=$(basename "$apk"); bn=${bn%.*}.apk	# PackageManager scans *.apk only
 					umount "/system/app/$bn" 2>/dev/null
 					: > "/system/app/$bn" 2>/dev/null
 					if mount --bind "$apk" "/system/app/$bn" 2>/dev/null; then
@@ -2230,26 +2230,42 @@ if [ -x /bin/android-init ] && [ -f /init.rc ] && [ -n "$SDDEV" ]; then
 							cp -f "$f" "/system/lib/$bn" 2>/dev/null
 					fi
 				done
-				# 1. native libs bundled in the card APKs (armeabi)
-				for apk in /mnt/sd/CYANO3DS/*.apk; do
+				# 1. native libs bundled in the card APKs (armeabi).  They are
+				#    extracted onto the card and bind-mounted over the tmpfs
+				#    /system/lib entries, so they cost no RAM.  Copying them into
+				#    the tmpfs made every installed APK's libraries (5 MiB for
+				#    Jetpack Joyride) permanently smaller RAM for the games.  A
+				#    card that cannot take the extraction falls back to /tmp, and
+				#    a failed bind falls back to a RAM copy.
+				for apk in /mnt/sd/CYANO3DS/*.[aA][pP][kK]; do
 					[ -f "$apk" ] || continue
-					rm -rf /tmp/apk-lib 2>/dev/null
-					mkdir -p /tmp/apk-lib 2>/dev/null
-					if unzip -o -j "$apk" 'lib/armeabi/*.so' \
-							-d /tmp/apk-lib >/dev/null 2>&1; then
-						for so in /tmp/apk-lib/*.so; do
-							[ -f "$so" ] || continue
-							son=$(basename "$so")
-							case "$son" in
-								libEGL.so|libGLESv1_CM.so|libGLESv2.so) continue ;;
-							esac
-							umount "/system/lib/$son" 2>/dev/null
-							cp -f "$so" "/system/lib/$son" 2>/dev/null && \
-								chmod 0644 "/system/lib/$son" 2>/dev/null
-						done
-						say "  libs from $(basename "$apk"): $(ls /tmp/apk-lib 2>/dev/null | tr '\n' ' ')"
+					bn=$(basename "$apk"); bn=${bn%.*}
+					ldir=/mnt/sd/android/apklib/$bn
+					rm -rf "$ldir" 2>/dev/null
+					mkdir -p "$ldir" 2>/dev/null
+					if ! unzip -o -j "$apk" 'lib/armeabi/*.so' \
+							-d "$ldir" >/dev/null 2>&1; then
+						ldir=/tmp/apk-lib
+						rm -rf "$ldir" 2>/dev/null
+						mkdir -p "$ldir" 2>/dev/null
+						unzip -o -j "$apk" 'lib/armeabi/*.so' \
+							-d "$ldir" >/dev/null 2>&1 || continue
 					fi
+					for so in "$ldir"/*.so; do
+						[ -f "$so" ] || continue
+						son=$(basename "$so")
+						case "$son" in
+							libEGL.so|libGLESv1_CM.so|libGLESv2.so) continue ;;
+						esac
+						umount "/system/lib/$son" 2>/dev/null
+						: > "/system/lib/$son" 2>/dev/null
+						mount --bind "$so" "/system/lib/$son" 2>/dev/null || \
+							cp -f "$so" "/system/lib/$son" 2>/dev/null
+						chmod 0644 "/system/lib/$son" 2>/dev/null
+					done
+					say "  libs from $bn -> $ldir: $(ls "$ldir" | tr '\n' ' ')"
 				done
+				say "  free RAM after card libs: $(grep MemAvailable /proc/meminfo)"
 				rm -rf /tmp/apk-lib 2>/dev/null
 				# 2. explicit card .so overrides (patched libraries win).
 				#    The graphics/EGL libraries are deliberately NOT overridden:
@@ -2278,7 +2294,7 @@ if [ -x /bin/android-init ] && [ -f /init.rc ] && [ -n "$SDDEV" ]; then
 		return 0
 	}
 	if [ "$ANDROID" = 1 ] && \
-	   { ls /mnt/sd/CYANO3DS/*.apk >/dev/null 2>&1 || \
+	   { ls /mnt/sd/CYANO3DS/*.[aA][pP][kK] >/dev/null 2>&1 || \
 	     ls /mnt/sd/CYANO3DS/*.so  >/dev/null 2>&1; }; then
 		say "--- installing card apps/libs into /system (no image rebuild) ---"
 		install_card_apps
@@ -2661,7 +2677,7 @@ SD
 		CARD_SIG_FILE=/data/dalvik-cache/.card-apps.sig
 		CARD_SIG_NEW=/tmp/card-apps.sig
 		: > "$CARD_SIG_NEW" 2>/dev/null
-		for apk in /mnt/sd/CYANO3DS/*.apk; do
+		for apk in /mnt/sd/CYANO3DS/*.[aA][pP][kK]; do
 			[ -f "$apk" ] || continue
 			echo "$(basename "$apk") $(stat -c %s "$apk" 2>/dev/null) $(stat -c %Y "$apk" 2>/dev/null)" >> "$CARD_SIG_NEW"
 		done
@@ -2859,6 +2875,10 @@ GBCXML
 		mknod /dev/console c 5 1  2>/dev/null
 		mknod /dev/tty0    c 4 0  2>/dev/null
 		mknod /dev/ptmx    c 5 2  2>/dev/null
+		# Apps open /dev/ptmx to make a terminal; with the default 0644 root only
+		# the root shell could, so every app's pty open failed.  ueventd would set
+		# this on stock Android, and the port has no ueventd.
+		chmod 0666 /dev/ptmx 2>/dev/null
 		# Gingerbread's init blocks up to COMMAND_RETRY_TIMEOUT (5 s) waiting for
 		# /dev/.coldboot_done, which stock ueventd creates.  The port disables
 		# ueventd (it hand-builds /dev), so provide the file to skip the wait.

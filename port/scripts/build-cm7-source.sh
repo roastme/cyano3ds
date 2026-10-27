@@ -178,8 +178,15 @@ say "3/6  packing /system and /data"
 mkdir -p "$OUT/android"
 rm -f "$OUT/android/system.img" "$OUT/android/data.img"
 
-mke2fs -q -t ext4 -O ^has_journal -b 4096 -L system -d "$SYSDIR" \
-	"$OUT/android/system.img" "${SYSTEM_IMG_MB}M"
+# mke2fs -d copies each file's owner and mode from the tree, which is the build
+# user (uid 1001) with no setuid bit, so su could never become root. Android's
+# own image step applies fs_config for that; here fakeroot makes the tree look
+# root-owned to mke2fs (the tree itself is not changed) and su is set 06755.
+fakeroot -- sh -c '
+	chown -R 0:0 "$1"
+	chmod 06755 "$1/xbin/su"
+	mke2fs -q -t ext4 -O ^has_journal -b 4096 -L system -d "$1" "$2" "$3"
+' sh "$SYSDIR" "$OUT/android/system.img" "${SYSTEM_IMG_MB}M"
 printf '%-40s %s\n' "system.img" "$(du -h "$OUT/android/system.img" | cut -f1)"
 
 mke2fs -q -t ext4 -O ^has_journal -b 4096 -L data -F \
