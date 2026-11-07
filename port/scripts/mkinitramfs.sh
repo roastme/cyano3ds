@@ -1357,6 +1357,11 @@ kill_one() {
 		read -r S < "$D/oom_score_adj" 2>/dev/null || continue
 		[ "$S" -ge "$1" ] 2>/dev/null || continue
 		read -r SZ RSS REST < "$D/statm" 2>/dev/null || continue
+		# RSS 0: already past exit_mm (killed, waiting to be reaped).  A kill
+		# frees nothing and the next pass picks the same pid again, so the
+		# live victims wait.  The CM6 log showed this as the same pid killed
+		# 2-3 times in a row with rss=0kB while MemAvailable sat near 10 MB.
+		[ "${RSS:-0}" -gt 0 ] || continue
 		if [ "$S" -gt "$BESTS" ] || { [ "$S" -eq "$BESTS" ] && [ "${RSS:-0}" -gt "$BESTR" ]; }; then
 			BESTP=$P
 			BESTS=$S

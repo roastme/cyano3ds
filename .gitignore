@@ -45,7 +45,7 @@
 
 # --- session scratch: development notes + throwaway scripts (never public) -
 /work/
-
+/scratch/
 # --- binaries / archives / images / media ----------------------------------
 *.apk
 *.apks
