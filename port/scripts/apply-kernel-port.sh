@@ -522,8 +522,8 @@ config CTR_SND
 	  over the TSC SPI controller; the samples come from the CSND block
 	  (the DSi-style 32-channel DMA sound engine) on the I2S2 line, so no
 	  DSP firmware is needed.  Exposes an ALSA PCM playback device and
-	  plays a short test tone at boot.  CTR_SND also hooks the codec
-	  bring-up into the TSC driver via ctr_snd_codec_init().
+	  hooks the codec bring-up into the TSC driver via
+	  ctr_snd_codec_init().
 
 '''
     i = s.rindex("\nendif")

@@ -1145,6 +1145,11 @@ void ctr_cap_log_append(const char *payload, size_t len)
 	char line[256];
 	u32 n = 0;
 
+	/* Called on every Android log write; the ring is only read by the
+	 * bring-up capture page, so it must cost nothing on a normal boot. */
+	if (!ctr_debug)
+		return;
+
 	if (len < 2)
 		return;
 	/* payload is [priority][tag NUL][text], the classic 2009 ABI */
@@ -1605,9 +1610,12 @@ static int ctr_fb_probe(struct platform_device *pdev)
 	info->var.yoffset = 0;
 	ctr_fb_check_var(&info->var, info);
 
-	/* --- 4. show the test card through the userspace path ---------------
-	 * Deliberately: draw into the OS buffer, then transpose, so this
-	 * exercises exactly the code userspace drawing goes through.
+	/* --- 4. put a frame on the panel before userspace draws -------------
+	 * A normal boot stays black: the render buffers are zero-filled at
+	 * allocation and the scanout buffers are zeroed here.  The test card
+	 * is a bring-up diagnostic, so it is only painted when explicitly
+	 * asked for (ctr_lcd_fb.debug=1); when it is drawn it goes through the
+	 * userspace path (OS buffer, then transpose) on purpose.
 	 */
 	memset_io(f->vram, 0, f->vram_size);
 	ctr_fb_set_par(info);
@@ -1616,7 +1624,8 @@ static int ctr_fb_probe(struct platform_device *pdev)
 	f->lcd_idx = 0;
 	writel(0, f->pdc + PDC_SELECT);
 
-	ctr_lcd_testcard(f, (u16 *)f->fb_mem);
+	if (ctr_debug)
+		ctr_lcd_testcard(f, (u16 *)f->fb_mem);
 	if (f->transpose) {
 		ctr_blit_rot(f, (const u16 *)f->fb_mem, f->vram);
 		ctr_blit_rot(f, (const u16 *)f->fb_mem,
@@ -1643,13 +1652,13 @@ static int ctr_fb_probe(struct platform_device *pdev)
 		 f->lcd_w, f->lcd_h, f->lcd_bpp * 8, f->lcd_stride,
 		 f->transpose ? "transposed (portrait panel)"
 			      : "direct (landscape panel)");
-	if (f->transpose)
+	if (ctr_debug && f->transpose)
 		dev_info(dev, "testcard (through the transposition): expect 4 VERTICAL bands "
 			 "red,green,blue,white left->right; corner markers yellow "
 			 "top-left, magenta top-right, cyan bottom-left, red "
 			 "bottom-right; white staircase top-left; blue triangle "
 			 "pointing right\n");
-	else
+	else if (ctr_debug)
 		dev_info(dev, "testcard (direct): same layout, but the panel is scanned "
 			 "landscape\n");
 

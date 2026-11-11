@@ -29,7 +29,7 @@ for f in ["init", "bin/fakevold", "bin/pcmtest", "bin/selftest", "init.rc",
           "lib/firmware/ath6k/AR6002/nwm/stub_data.bin", "lib/firmware/ath6k/AR6002/nwm/stub_code.bin",
           "lib/firmware/ath6k/AR6002/nwm/main_type4.bin", "lib/firmware/ath6k/AR6002/nwm/database.bin"]:
     check(f in files, f"initramfs lacks /{f}")
-init = files.get("init", (0, b""))[1].decode(errors="replace")
+init = norm(files.get("init", (0, b""))[1].decode(errors="replace"))
 for needle in ["/bin/lid-sleep-hook", "/bin/dataflush periodic", "logcat -v time", "mount -o bind /mnt/sd /mnt/sdcard",
                "ctr_cam", "/bin/selftest"]:
     check(needle in init, f"initramfs /init lacks {needle!r}")

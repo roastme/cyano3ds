@@ -263,27 +263,32 @@ direct).
 
 ## 6. Hardware verification checklist
 
-The display was verified on a real New 3DS.  The driver paints a self-test
-pattern directly into scanout memory at probe (no userspace involved), designed
-so that every axis of the mapping is visible in one glance.  In the transposed
+The display was verified on a real New 3DS.  A normal boot leaves the panel
+black until Android's first frame: the driver zero-fills both render buffers at
+allocation and both scanout buffers at probe.  Booting with
+`ctr_lcd_fb.debug=1` paints a self-test card instead, **through the userspace
+path** - drawn into the OS-visible buffer, then through the same
+transposition/copy every Android frame goes through - so a broken transpose or a
+wrong colour order shows up without waiting for the launcher.  In the transposed
 (real hardware) layout it must look like:
 
 ```
 +--------+--------+--------+--------+
-|  dim   |  dim   |  dim   |  dim   |   <- upper half: same 4 bands,
-|  red   | green  |  blue  | white  |      half brightness
+|  red   | green  |  blue  | white  |   <- four FULL-height vertical bands
+|        |        |        |        |
+| yellow | stair  |  blue  |magenta |   <- corner markers, staircase, arrow
+|        | case   | arrow  |        |
+|  cyan  |        |        |  red   |
 +--------+--------+--------+--------+
-| bright | bright | bright | bright |
-| yellow | green  |  blue  | white  |   <- lower half full brightness
-| red    |        |        |        |
-+--------+--------+--------+--------+
-  ^ yellow marker lives in the bottom-left corner
 ```
 
 * four **vertical** bands, red leftmost, white rightmost;
-* the lower half of each band at full brightness, the upper half dimmed
-  (this is the test for the sign of the second axis);
-* a **yellow** square in the **bottom-left** corner.
+* 32x32 corner markers: **yellow** top-left, **magenta** top-right, **cyan**
+  bottom-left, **red** bottom-right - orientation and mirroring in one glance;
+* a white staircase growing down-right under the yellow marker, and a blue
+  triangle pointing right in the middle - chirality and column order;
+* the source image is 320x240 landscape, so an upright panel means the
+  transposition is right.
 
 On diagnostic boots (a `diag` file in `CYANO3DS/`), `fbtest` (see
 `port/userland/tests/fbtest.c`) additionally replaces it with 8 colour bars, a

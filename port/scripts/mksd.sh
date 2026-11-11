@@ -117,10 +117,13 @@ To boot it from fastboot3DS:
 What you should see
   * both screens go glitchy for a few seconds - this is normal;
   * the TOP screen becomes the Linux console;
-  * the BOTTOM screen runs the display test, then the bring-up log, and
-    counts the dexopt progress ("[ 12/79] ...") during the first boot;
-  * the TOP screen then counts the packages as system_server scans them;
+  * the BOTTOM screen is black while the framework starts (its first frame
+    usually arrives 1-3 minutes into the first boot);
+  * the TOP screen counts the packages as system_server scans them;
   * finally the Android launcher (Launcher2/ADW) appears on the BOTTOM screen.
+
+  A boot with `ctr_lcd_fb.debug=1` on the kernel command line paints the
+  display self-test card on the bottom screen instead of leaving it black.
 
 FIRST BOOT
   * The first boot takes ~2-3 minutes on a 3DS (the framework dexopt + the

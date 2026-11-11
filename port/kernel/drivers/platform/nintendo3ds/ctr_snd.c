@@ -26,9 +26,7 @@
  *                              silicon bare-metal.
  *
  *   the platform driver       - CSND programming + an ALSA PCM playback
- *                              device, plus a short boot-time test tone so the
- *                              hardware path can be verified without a
- *                              userspace audio stack.
+ *                              device.
  *
  * The ALSA ring buffer doubles as the CSND DMA buffer: the codec plays it in a
  * hardware loop while the application fills it ahead of the read pointer.
@@ -1581,54 +1579,6 @@ static const struct snd_pcm_ops ctr_snd_cap_ops = {
 };
 
 /* ------------------------------------------------------------------------- */
-/* Boot-time test tone                                                       */
-/* ------------------------------------------------------------------------- */
-
-/* One period of a sine, amplitude 12000, 32 entries. */
-static const s16 ctr_snd_sine32[32] = {
-	0, 2341, 4592, 6667, 8485, 9978, 11087, 11769,
-	12000, 11769, 11087, 9978, 8485, 6667, 4592, 2341,
-	0, -2341, -4592, -6667, -8485, -9978, -11087, -11769,
-	-12000, -11769, -11087, -9978, -8485, -6667, -4592, -2341,
-};
-
-static int __maybe_unused ctr_snd_test_tone(struct ctr_snd *snd)
-{
-	const unsigned int rate = 32768;
-	const unsigned int frames = 4096;	/* ~125 ms, looped */
-	const unsigned int freq = 440;
-	void *buf;
-	dma_addr_t phys;
-	unsigned int i;
-	u32 phase = 0;
-	/* table steps per sample: 32*freq/rate (fits in 32 bits for the
-	 * 8 kHz..48 kHz range). */
-	const u32 step = ((u32)freq * 32 * 65536) / rate;
-
-	buf = dma_alloc_coherent(snd->dev, frames * 2, &phys, GFP_KERNEL);
-	if (!buf)
-		return -ENOMEM;
-
-	for (i = 0; i < frames; i++) {
-		s16 v = ctr_snd_sine32[(phase >> 16) & 31];
-		((s16 *)buf)[i] = v;
-		phase += step;
-	}
-
-	csnd_stop_ch(snd->csnd, CTR_SND_CHANNEL);
-	csnd_setup_ch(snd->csnd, CTR_SND_CHANNEL, rate, phys, frames * 2,
-		      CSND_CH_FMT_PCM16 | CSND_CH_RPT_LOOP | CSND_CH_LERP);
-	csnd_play(snd->csnd, CTR_SND_CHANNEL, true);
-	dev_info(snd->dev, "playing boot test tone (440 Hz)\n");
-	msleep(500);
-	csnd_play(snd->csnd, CTR_SND_CHANNEL, false);
-	csnd_stop_ch(snd->csnd, CTR_SND_CHANNEL);
-
-	dma_free_coherent(snd->dev, frames * 2, buf, phys);
-	return 0;
-}
-
-/* ------------------------------------------------------------------------- */
 /* Probe / remove                                                            */
 /* ------------------------------------------------------------------------- */
 
@@ -1651,8 +1601,8 @@ static int ctr_snd_probe(struct platform_device *pdev)
 
 	/*
 	 * The child of an SPI device has no DMA mask configured by the OF core;
-	 * ALSA's SNDRV_DMA_TYPE_DEV and our coherent test-tone buffer need one.
-	 * Physical == bus address on the 3DS (no IOMMU).
+	 * ALSA's SNDRV_DMA_TYPE_DEV needs one.  Physical == bus address on the
+	 * 3DS (no IOMMU).
 	 */
 	err = dma_coerce_mask_and_coherent(dev, DMA_BIT_MASK(32));
 	if (err)
@@ -1712,10 +1662,6 @@ static int ctr_snd_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, snd);
 
 	dev_info(dev, "registered ALSA card (CSND/I2S2 playback, MIC capture, no DSP firmware needed)\n");
-
-	/* The boot-time test tone (ctr_snd_test_tone) is compiled in for
-	 * debugging but not played: it is loud and surprising.  Call
-	 * ctr_snd_test_tone(snd) here to hear it. */
 
 	return 0;
 

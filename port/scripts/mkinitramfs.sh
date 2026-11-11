@@ -17,7 +17,9 @@
 # so this stays small: Android's /system lives on the SD card.
 #
 # Boot log: init writes it to the SD card when the card is writable
-# (SD:/CYANO3DS/*.log) and always renders it on the bottom screen.
+# (SD:/CYANO3DS/*.log) and prints it on the TOP-screen console.  The bottom
+# screen stays black until Android draws; diag boots (CYANO3DS/diag) also page
+# the log onto the bottom screen with fbsay.
 #
 # Usage: mkinitramfs.sh [out-dir]        (default $HOME/p3ds/dist)
 

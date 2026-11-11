@@ -8,18 +8,14 @@ Environment:
                without it.
   INITRAMFS    a built initramfs.cpio.gz to inspect (optional).
 """
-import atexit
-import importlib.util
 import os
 import pathlib
 import shutil
 import subprocess
 import sys
-import tempfile
 
 PORT = pathlib.Path(__file__).resolve().parent.parent
 REPO = PORT.parent
-KERNEL = PORT / "kernel"
 SCRIPTS = PORT / "scripts"
 USERLAND = PORT / "userland"
 KERNEL_TREE = pathlib.Path(os.environ.get(
@@ -39,15 +35,9 @@ def read(path):
     return pathlib.Path(path).read_text(encoding="utf-8", errors="replace")
 
 
-def order(text, *needles):
-    """True when every needle occurs, in this order."""
-    at = -1
-    for n in needles:
-        i = text.find(n, at + 1)
-        if i < 0:
-            return False
-        at = i
-    return True
+def norm(text):
+    """Collapse whitespace, so artifact checks ignore an init script's wrapping."""
+    return " ".join(text.split())
 
 
 def heredoc(text, name):
@@ -63,28 +53,6 @@ def heredoc(text, name):
 def skip(reason):
     print(f"{_name}: SKIP ({reason})")
     sys.exit(0)
-
-
-_ath6k = None
-
-
-def ath6k_driver():
-    """The ath6k_legacy tree as fix-wifi-octoblimp.py builds it (Octoblimp's
-    base plus the Cyano3DS delta), fetched once into a temp dir."""
-    global _ath6k
-    if _ath6k is None:
-        spec = importlib.util.spec_from_file_location(
-            "fix_wifi_octoblimp", SCRIPTS / "fix-wifi-octoblimp.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        top = pathlib.Path(tempfile.mkdtemp(prefix="ath6k-test-"))
-        atexit.register(shutil.rmtree, top, True)
-        _ath6k = top / "ath6k_legacy"
-        try:
-            mod.fetch_octo_driver(_ath6k)
-        except (subprocess.CalledProcessError, SystemExit) as e:
-            skip("cannot fetch the ath6k base from Octoblimp: %s" % e)
-    return _ath6k
 
 
 def have(tool):

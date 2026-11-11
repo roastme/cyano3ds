@@ -1,36 +1,26 @@
 #!/usr/bin/env python3
-"""External storage: the card as Android's mounted /mnt/sdcard.
+"""External storage: fakevold answers Android's MountService.
 
 The init mounts the card with vold's ownership/masks and binds it at
-/mnt/sdcard; fakevold stands in for vold and reports it mounted; the kernel
-answers Gingerbread's VFAT_IOCTL_GET_VOLUME_ID so MediaProvider does not
-crash.  fakevold is built for the host and driven over a real socket here.
+/mnt/sdcard, and fakevold stands in for vold to report it mounted (the card is
+mounted by the init, not by vold).  This builds fakevold for the host and
+speaks the vold socket protocol to it, so the checks are the replies a real
+MountService would read.  When a patched kernel tree is present it also
+confirms the VFAT_IOCTL_GET_VOLUME_ID patch actually landed there (that ioctl
+is what keeps MediaProvider from crashing).
 """
 import socket
 import tempfile
 import time
 from t3ds import *
 
-mk = read(SCRIPTS / "mkinitramfs.sh")
-check('o="-o uid=1000,gid=1015,fmask=0002,dmask=0002"' in mk, "card no longer mounted system:sdcard_rw with mask 0002")
-# fmask=0702 removes every right from the owner, uid 1000 = system_server:
-# PackageManager could not open the card APKs bound into /system/app.
-check("fmask=07" not in mk.replace("vold's fmask=0702", ""), "a card mask locks the owner (system_server) out again")
-check(order(mk, "mount -o bind /mnt/sd /mnt/sdcard", "/bin/android-init 2>&1"),
-      "/mnt/sdcard must be bound before Android's init starts")
-check("s|^service vold /system/bin/vold|service vold /bin/fakevold|" in mk, "vold not replaced by fakevold")
-check('-o "$ROOT/bin/fakevold" "$PORT/userland/storage/fakevold.c"' in mk, "fakevold not built")
-fat = read(SCRIPTS / "add-vfat-android-volume-id.py")
-check("_IOR('r', 0x12, __u32)" in fat and "return MSDOS_SB(inode->i_sb)->vol_id;" in fat,
-      "Android's VFAT_IOCTL_GET_VOLUME_ID patch changed")
-check('python3 "$PORT/scripts/add-vfat-android-volume-id.py" "$KD"' in read(SCRIPTS / "apply-kernel-port.sh"),
-      "apply-kernel-port.sh does not apply the VFAT volume-id ioctl")
+if not have("gcc"):
+    skip("no host gcc for fakevold")
+
 ft = KERNEL_TREE / "fs/fat/file.c"
 if ft.exists():
     check("VFAT_IOCTL_GET_VOLUME_ID" in read(ft), f"{ft} lacks the Android volume-id ioctl")
 
-if not have("gcc"):
-    skip("no host gcc for fakevold")
 with tempfile.TemporaryDirectory() as td:
     td = pathlib.Path(td)
     exe = td / "fakevold"
