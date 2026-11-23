@@ -26,6 +26,11 @@
 set -euo pipefail
 
 OUT="${1:-$HOME/p3ds/dist}"
+# Absolute, because the verification at the end extracts the artefact from a
+# scratch directory; a relative out-dir would make it gzip the wrong path and
+# report a missing file after a successful build.
+mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)"
 MINIMAL_DIAGNOSTICS="${MINIMAL_DIAGNOSTICS:-0}"
 # ---------------------------------------------------------------------------
 # Android flavor.  The kernel and the bring-up machinery are shared; only the
@@ -150,7 +155,8 @@ INIT_APPLETS="sh mount umount ln ls cat echo sleep dmesg tee sync mkdir mknod
              chmod chown rm mv cp df stat true false
              grep tail head cut tr hexdump dd wc ps free kill pidof poweroff
              reboot basename dirname readlink sed test awk date sort nice
-             tar timeout unzip mkfifo mkswap swapon"
+             tar timeout unzip mkfifo mkswap swapon
+             i2cget i2cdetect i2ctransfer"
 for a in $INIT_APPLETS; do
 	ln -sf busybox "$ROOT/bin/$a"
 done
@@ -744,6 +750,10 @@ arm-linux-gnueabi-gcc -static -O2 -Wall \
 	-o "$ROOT/bin/logwrap" "$PORT/userland/tests/logwrap.c"
 arm-linux-gnueabi-gcc -static -O2 -Wall \
 	-o "$ROOT/bin/rt" "$PORT/userland/tests/rt.c"
+# gyrocal: measures the gyroscope's zero-rate offset at boot and writes it to
+# the driver's calibbias, so a console on the table reports no rotation
+arm-linux-gnueabi-gcc -static -O2 -Wall \
+	-o "$ROOT/bin/gyrocal" "$PORT/userland/tests/gyrocal.c"
 # selftest: on-device subsystem checks, run by the init after boot
 install -m 755 "$PORT/userland/tests/selftest.sh" "$ROOT/bin/selftest"
 # fakevold: answers MountService in place of vold (the card is ours)
@@ -2692,7 +2702,11 @@ SD
 		   [ "$(cat "$CARD_SIG_NEW")" != "$(cat "$CARD_SIG_FILE" 2>/dev/null)" ]; then
 			n=0
 			while read -r bn _rest; do
-				rm -f "/data/dalvik-cache/system@app@$bn@classes.dex" 2>/dev/null
+				# normalize like install_card_apps: the dalvik-cache key uses
+				# the installed name (extension forced to lower-case .apk),
+				# not the card's original case (GLTEST.APK -> GLTEST.apk)
+				obn=${bn}; obn=${obn%.*}.apk
+				rm -f "/data/dalvik-cache/system@app@$obn@classes.dex" 2>/dev/null
 				n=$((n+1))
 			done < "$CARD_SIG_NEW"
 			cp -f "$CARD_SIG_NEW" "$CARD_SIG_FILE" 2>/dev/null
@@ -2969,6 +2983,26 @@ GBCXML
 			# button's event4 ("Permission denied" in the EventHub log).
 			chmod 0666 "/dev/input/event$i" 2>/dev/null
 		done
+		# The sensors HAL runs in system_server (uid system).  IIO's raw and
+		# scale attributes are world-readable, but the enable attribute is
+		# 0644 root, so system_server could not switch the accelerometer or
+		# gyroscope on.  ueventd would normally do this and the port has no
+		# ueventd, so open both enable attributes up here.
+		for f in /sys/bus/iio/devices/iio:device*/in_*_en; do
+			[ -e "$f" ] || continue
+			chmod 0666 "$f" 2>/dev/null
+		done
+		# The gyroscope does not read zero while sitting still (this unit
+		# shows about (-29, +10, -31) LSB, i.e. 2 deg/s), and Android would
+		# integrate that offset forever: a game's aim walks across the screen
+		# with the console on the table.  /bin/gyrocal averages a still
+		# period, writes the offset into in_anglvel_*_calibbias - which the
+		# driver subtracts from every read - and keeps it on the card, so a
+		# boot where the console is being handled still starts from the last
+		# known-good offset instead of none.
+		if [ -x /bin/gyrocal ]; then
+			/bin/gyrocal 2>&1 | while IFS= read -r line; do say "$line"; done
+		fi
 		# ALSA sound nodes.  ctr_snd.c registers an ALSA PCM card, but the
 		# Android ueventd is disabled (the port hand-builds /dev), so nothing
 		# would otherwise create /dev/snd/*.  Enumerate the sound class:
@@ -3080,6 +3114,20 @@ GBCXML
 				# Dalvik VM starting on the single core at the same time just
 				# makes the boot slower.
 				sleep 20
+				# wait until servicemanager is registered AND "window" is
+				# published before the first getService: one early call gets
+				# BR_DEAD_REPLY and libbinder permanently poisons this VM's
+				# servicemanager BpBinder (mAlive=0), so PortHelper would
+				# otherwise spin in :wait_window on DeadObjectException forever.
+				# `service check` runs in its own app_process, so an early
+				# failure there cannot poison PortHelper's proxy.
+				i=0
+				while [ $i -lt 60 ]; do
+					/system/bin/service check window 2>/dev/null | grep -q found && break
+					i=$((i+1))
+					sleep 5
+				done
+				sleep 1
 				while true; do
 					PATH=/system/bin:$PATH BOOTCLASSPATH="$BCP" \
 						CLASSPATH=/bin/porthelper.jar \
@@ -3487,6 +3535,32 @@ GBCXML
 		export ANDROID_CACHE=/data
 		export ANDROID_DATA=/data
 		say "dalvik-cache: /data (dexopt-data-only=1); ANDROID_CACHE=/data"
+		# Hardware dump while Android was still not running: after a change
+		# to the i2c controller, a sensor driver or a DT address, one boot
+		# says which addresses answer on which bus and which IIO devices
+		# exist, without waiting for the five-minute self-test.  Written
+		# once to a small file, so a wedged card cannot hang the boot.
+		if [ -x /bin/i2cdetect ]; then
+			(
+				echo "== i2c buses =="
+				for d in /dev/i2c-*; do
+					[ -e "$d" ] || continue
+					echo
+					echo "-- ${d##*/} --"
+					/bin/i2cdetect -y -r "${d##*i2c-}" 2>&1
+				done
+				echo
+				echo "== iio devices =="
+				for f in /sys/bus/iio/devices/iio:device*/name; do
+					[ -e "$f" ] && echo "${f%*/name}: $(cat "$f")"
+				done
+				echo
+				echo "== dmesg (i2c, sensors, ir) =="
+				dmesg | grep -iE "i2c|gyro|accel|itg|sc16|3ds-" | tail -50
+			) > "$LOGDIR/i2c-boot.txt" 2>&1
+			sync
+			say "i2c/IIO dump: CYANO3DS/i2c-boot.txt"
+		fi
 		# Run Android's init as a CHILD instead of exec'ing it.  As PID 1 a
 		# segfault in it panics the kernel ("Attempted to kill init!
 		# exitcode=0x0000000b" - exactly what the first Android attempt did).
@@ -3504,17 +3578,20 @@ GBCXML
 		# and stops the init dead (it is the parent of every service).  The
 		# late-diag flusher mirrors the file to the SD every few seconds.
 		# On-device self-test (port/userland/tests/selftest.sh): once Android
-		# has had five minutes, check lid sleep, Wi-Fi, audio, cameras,
+		# has had two minutes, check lid sleep, Wi-Fi, audio, cameras,
 		# storage, /data saving and the console log, and leave the report in
 		# CYANO3DS/selftest.txt.  CYANO3DS/noselftest turns it off.
+		# The report is written straight to the card, section by section, so
+		# pulling the card mid-run keeps what has already been checked
+		# instead of losing the whole run (it is a background subshell: if
+		# the card wedges, only this waits, never the init).
 		if [ -x /bin/selftest ] && [ ! -e "$LOGDIR/noselftest" ]; then
 			(
-				sleep 300
-				/bin/selftest > /mnt/probe/selftest.txt 2>&1
-				cp /mnt/probe/selftest.txt "$LOGDIR/selftest.txt" 2>/dev/null
+				sleep 120
+				/bin/selftest > "$LOGDIR/selftest.txt" 2>&1
 				sync
 			) &
-			say "self-test armed (CYANO3DS/selftest.txt about 5 min after Android starts)"
+			say "self-test armed (CYANO3DS/selftest.txt about 2 min after Android starts)"
 		fi
 		# External storage: Android's EXTERNAL_STORAGE is /mnt/sdcard.  Bind
 		# the card there; /bin/fakevold (in place of vold, see init.rc) then

@@ -124,6 +124,9 @@ The kernel is the base port plus the CM7-relevant fixes:
 - **CSND/I2S2 + TSC2117 audio** — an ALSA PCM card, no DSP firmware needed.
 - **AR6014 Wi-Fi** — the pre-mainline AR6K driver booting Nintendo's NWM
   firmware; see [WIFI.md](WIFI.md).
+- **Accelerometer + New 3DS gyroscope** — the MCU's LIS331DLH and the
+  ITG-1010 on I2C bus 2, both exposed as IIO devices and polled by the
+  `sensors.nintendo3ds` HAL.
 
 ## Graphics
 
@@ -183,6 +186,129 @@ helper (`com.cyano3ds.PortHelper`, built as `/bin/porthelper.jar` by
 refreshes user activity, which keeps the screen on. A card file
 `CYANO3DS/nohelper` disables it.
 
+## Motion sensors
+
+Two IMUs are available:
+
+- **Accelerometer** — a ST LIS331DLH behind the MCU. The existing
+  `drivers/platform/nintendo3ds/mcu/accel.c` exposes it as an IIO device
+  (`in_accel_{x,y,z}_raw`, `in_accel_scale`, `in_accel_en`).
+- **Gyroscope** — the New 3DS gyroscope on I2C bus 2 (`0x10148000`, the
+  IR/gyro bus). Two different parts are fitted: the InvenSense ITG-1010 on
+  the XL boards, whose 7-bit address is set by its AD0 pin (`0x69`, GBATEK
+  "2:D2h", or `0x68`, "2:D0h"), and the ST L3GD20H on the small New 3DS
+  (KTR), whose ID register `0x0F` reads `0xD7` and which answers at `0x6B`
+  ("2:D6h", the address 3dbrew lists for `i2c::HID` device 9). `ctr_gyro.c`
+  reads the ID registers, probes all three addresses, and binds through an
+  I2C client at whichever answered, so the DT node only has to name one of
+  them. Neither part is register compatible with the ITG-3200/ITG-3270 of
+  the Old 3DS (same `0x68` ID byte, but at `0x75` instead of `0x00` and with
+  the outputs at `0x43..0x48`); the L3GD20H keeps its outputs at `0x28..0x2D`
+  little-endian and only auto-increments the register address when bit 7 of
+  the sub-address is set (without it a burst read repeats one register).
+  `ctr_gyro.c` drives both directly and exposes `in_anglvel_{x,y,z}_raw`,
+  `in_anglvel_scale`, `in_anglvel_{x,y,z}_calibbias` and `in_anglvel_en`.
+  `add-ctr-gyro.py` installs it and adds the DT node under `&i2c3`.
+
+A gyroscope does not read zero while sitting still. The L3GD20H in the KTR
+this was brought up on reports about `(-29, +10, -31)` LSB, and at 70 mdps/LSB
+that is 2 deg/s that Android integrates forever — a game's aim walks across the
+screen with the console on the table. `/bin/gyrocal` (built from
+`port/userland/tests/gyrocal.c`, run by the init once the IIO nodes exist)
+restores the offset saved on the card, then powers the part, discards five
+samples while the filter settles, averages 64 more and writes the mean to
+`in_anglvel_*_calibbias` — but only if the spread over those samples proves the
+console was not being handled (40 LSB on any axis means it was, and then the
+previous calibration is kept rather than replaced with garbage). The driver
+subtracts `calibbias` from every raw read, so the offset lives in the kernel and
+both the Android HAL and the boot self-test see corrected values. The values
+are saved to `CYANO3DS/gyro-calib`; delete that file to make the next boot
+relearn them.  Because the offset also moves as the part warms up (the
+datasheet allows 0.03-0.05 dps per degree, a few LSB over the first minutes),
+the self-test runs `/bin/gyrocal` a second time once the console has been on
+for a few minutes.  That run measures the leftover on top of the calibration
+already in force and adds to it, so it refines rather than replaces, and the
+same stillness gate means a console being played is left alone.
+
+Finding a sensor that is not there needs an error, not `FF`: `ctr_i2c.c`
+(linux-3ds) only looked at the ACK bit after data bytes, so a read from an
+unpopulated address returned `FF FF` and looked successful, and a NAK aborted
+without a STOP, leaving the bus paused for the next transfer.
+`fix-i2c-ack.py` (`apply-kernel-port.sh` runs it) checks the address ACK,
+returns `-ENXIO`, ends a failed transfer with `STOP|PAUSE` like the ARM9
+firmware does, and advertises the core's emulated SMBus transfers so `i2cdetect
+-y 2`, `i2cget` and `i2cset` work from the console.
+
+The `sensors.nintendo3ds` HAL (`device/nintendo/nintendo3ds/sensors`) finds the IIO
+channels by name, so the `iio:deviceN` numbering does not matter. It enables
+the sensors when an app asks for them, polls at `setDelay()`'s rate (`minDelay`
+is 20 ms for the accelerometer, 10 ms for the gyroscope), and reports standard
+`SENSOR_TYPE_ACCELEROMETER` / `SENSOR_TYPE_GYROSCOPE` events. Both parts run at ±2000 °/s: the scale is 0.001065264 rad/s per LSB on the
+ITG-1010 and 0.001221730 on the L3GD20H, and `in_anglvel_scale` reports
+whichever part was found.
+
+The chip axes are not the Android screen axes. Azahar documents the console's
+motion frame in `core/frontend/input.h` (x+ = D-pad left, y+ = out of the
+touch screen, z+ = D-pad up) and `hid.cpp` converts it to the registers as
+`accel raw = (-2x, -2z, 2y)` and `gyro raw = (x, z, -y)`, so raw x is the
+D-pad-left axis, raw y the D-pad-up axis and raw z the out-of-screen axis. The
+HAL maps both sensors to the Android frame (x+ right, y+ up, z+ out of the
+screen) with
+
+```
+accel = (-raw_x, +raw_y, -raw_z) * in_accel_scale
+gyro  = (-raw_x, +raw_y, -raw_z) * in_anglvel_scale
+```
+
+The signs are measured, not guessed: a console lying flat with the screen up
+reports raw `(650, 580, -16276)` and `|raw| * in_accel_scale = 9.75 m/s^2`, so
+one g sits on raw z alone and the registers hold the LIS331's 12-bit values
+left-justified (1024/g << 4 = 16384/g, which is what the driver's
+`9.80665/16384` scale assumes). Android's accelerometer reports the *up*
+vector, so flat and screen-up has to read `+g` on z - raw z reads `-g` in that
+pose, which fixes that sign; the console's x+ is the D-pad's left while
+Android's is the screen's right, which fixes the other. Both sensors end up
+with the same map because the gyro's raw signs are the opposite of the
+accelerometer's in `hid.cpp` and the accelerometer's vector is negated on the
+way in.
+
+This matters more than it looks: `WindowOrientationListener` in CM7 computes
+`-atan2(-x, y)`. With raw z on Android's y (an earlier version of the HAL) a
+console lying still on a table read `(0.39, -9.75, 0.35)` and the framework
+landed on 177.7 degrees, its `ROTATION_180` band - "reverse portrait" while the
+console sat on a table. With raw z on Android's z the tilt is 90 degrees, past
+its `MAX_TILT` of 75, so orientation is ignored and the launcher stays in
+landscape. The map is `map_axis()` in the HAL source and the boot selftest
+prints both the raw and the mapped values plus the pose it infers. The HAL also
+logs `accel <x> <y> <z> -> <pose>` whenever the pose changes, so every
+`WindowManager: Setting rotation to N` line in `android-log.txt` can be matched
+against the reading that caused it - `Setting rotation to 2` while the log says
+`flat, screen up` would mean the map is wrong again.
+
+Install the two feature files
+(`android.hardware.sensor.accelerometer.xml`, `...gyroscope.xml`) from the
+device product so PackageManager and apps see the hardware. There is no
+magnetometer, calibration data or `rotation vector` sensor; games that need
+those still see only the raw accelerometer/gyroscope streams.
+
+`make droidcore` puts the HAL in the build tree as
+`system/lib/hw/sensors.nintendo3ds.so`. When the tree's `out/` is not available
+the library can be built on its own against the same headers and toolchain:
+`bash port/scripts/build-sensors-hal.sh` compiles it with
+`prebuilt/linux-x86/toolchain/arm-eabi-4.4.3`, links it against the bionic
+libraries taken from a `system.img`, and checks that `HMI` is exported and that
+every undefined symbol is one the image's libraries define — a missing
+`sensors.nintendo3ds.so` is otherwise only visible as
+`SensorService: couldn't load sensors module` in logcat, with no sensor and no
+reason given.
+
+The boot selftest (`CYANO3DS/selftest.txt`) reports both IIO devices, the HAL
+and feature files, and scans bus 2 with `i2cdetect`/`i2cget` — it prints what
+answers at `0x68`, `0x69` and `0x6b`, so a gyroscope that is missing, at the
+wrong address or unpowered is one boot away from being obvious. It also checks
+that the gyroscope reads within 10 LSB of zero at rest, which fails if the
+zero-rate calibration was not applied.
+
 ## First boot
 
 - The boot stage pre-optimises the system apps and saves the result to
@@ -198,6 +324,6 @@ refreshes user activity, which keeps the screen on. A card file
 
 - Boots to ADWLauncher + SystemUI; Settings, Contacts and Calculator run.
 - Touch, buttons, audio, the microphone, the battery indicator, Wi-Fi, lid
-  sleep and the cameras work. `CYANO3DS/selftest.txt`, written after each
-  boot, checks most of them.
+  sleep, the cameras and the accelerometer/gyroscope work.
+  `CYANO3DS/selftest.txt`, written after each boot, checks most of them.
 - No GPU, no second Android screen — see [SCOPE.md](SCOPE.md).

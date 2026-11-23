@@ -185,7 +185,7 @@
     move-exception v4
 
     :hold_pm
-    if-nez v7, :hold_sleep
+    if-eqz v7, :hold_sleep
     :try_ua
     invoke-static {}, Landroid/os/SystemClock;->uptimeMillis()J
     move-result-wide v2

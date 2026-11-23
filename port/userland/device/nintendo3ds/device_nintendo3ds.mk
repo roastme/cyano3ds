@@ -35,6 +35,11 @@ PRODUCT_PACKAGES += \
     alsa.default \
     acoustics.default
 
+# Sensors HAL: the MCU accelerometer (IIO in_accel_*) and the New 3DS
+# gyroscope (ctr_gyro.c, IIO in_anglvel_*) are polled from sysfs.
+PRODUCT_PACKAGES += \
+    sensors.nintendo3ds
+
 # Permission files: the 3DS has a touchscreen and normal buttons.
 #
 # It is a Wi-Fi-only device, declared the way Gingerbread Wi-Fi-only tablets
@@ -45,7 +50,9 @@ PRODUCT_PACKAGES += \
 PRODUCT_COPY_FILES += \
     frameworks/base/data/etc/handheld_core_hardware.xml:system/etc/permissions/handheld_core_hardware.xml \
     frameworks/base/data/etc/android.hardware.touchscreen.xml:system/etc/permissions/android.hardware.touchscreen.xml \
-    frameworks/base/data/etc/android.hardware.wifi.xml:system/etc/permissions/android.hardware.wifi.xml
+    frameworks/base/data/etc/android.hardware.wifi.xml:system/etc/permissions/android.hardware.wifi.xml \
+    frameworks/base/data/etc/android.hardware.sensor.accelerometer.xml:system/etc/permissions/android.hardware.sensor.accelerometer.xml \
+    frameworks/base/data/etc/android.hardware.sensor.gyroscope.xml:system/etc/permissions/android.hardware.sensor.gyroscope.xml
 
 # Wi-Fi: Atheros AR6014G via the in-kernel ath6kl (cfg80211 + CFG80211_WEXT).
 # wpa_supplicant (0.6.x, WEXT) is only built when WPA_SUPPLICANT_VERSION and

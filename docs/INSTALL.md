@@ -142,9 +142,10 @@ on the kernel command line) is experimental: on hardware it did not wake up.
 is a clean shutdown here, so nothing could turn them back on). For a timeout,
 put it in milliseconds in `CYANO3DS/screen-timeout`, e.g. `120000`.
 
-**Diagnostics:** about five minutes after Android starts, the boot stage writes
+**Diagnostics:** about two minutes after Android starts, the boot stage writes
 `CYANO3DS/selftest.txt`, a PASS/FAIL report on lid sleep, Wi-Fi, audio,
-cameras, storage and `/data` saving. The top screen shows Android's warnings
+cameras, storage and `/data` saving. It is written section by section, so
+pulling the card early keeps whatever had been checked by then. The top screen shows Android's warnings
 and errors live; put a logcat level letter (`V D I W E F`) in
 `CYANO3DS/console-log` to change it, or create `CYANO3DS/noconsolelog` to turn
 it off.

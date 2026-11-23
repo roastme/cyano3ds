@@ -12,9 +12,17 @@ family, which has 128 MB of RAM and one core at 268 MHz. It also boots on a New
 2. `bash port/scripts/cm6-rootless.sh bootstrap chroot port build package`
    (an i386 Ubuntu 12.04 chroot under proot, no root needed; the build takes
    about an hour).
-3. `ANDROID_FLAVOR=cm6 bash port/scripts/mkinitramfs.sh OUTDIR`, then put
-   `out/cm6/android/{system,data}.img` and the usual `linux/` files (with the
-   Old 3DS device tree, `nintendo3ds_ctr.dtb`) on the card.
+3. `ANDROID_FLAVOR=cm6 bash port/scripts/mkinitramfs.sh out/cm6-dist`, then
+   stage the card:
+
+   ```bash
+   ANDROID_FLAVOR=cm6 bash port/scripts/mksd.sh out/sd-cm6 --with-android --dist=out/cm6-dist
+   ```
+
+   `mksd.sh` picks the CM6 image pair (`out/cm6/android`), the Old 3DS device
+   tree (`nintendo3ds_ctr.dtb`) and `Cyano3DS-CM6.firm` by flavor; `--dist=`
+   points it at the CM6 initramfs, which is built into its own directory
+   because the flavor is baked into `/init`.
 
 The device tree is in `port/userland/device-cm6/ctr/`.
 

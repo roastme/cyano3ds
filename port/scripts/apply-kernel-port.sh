@@ -480,6 +480,16 @@ else:
     print("    dtsi: &i2c3 extrapad@2a (ZL/ZR) added")
 PY
 
+# New 3DS gyroscope (InvenSense ITG-1010 on I2C 2:0xD2/0xD0).  It is not
+# register compatible with the ITG-3200/ITG-3270 the mainline itg3200 driver
+# supports, so add a small IIO driver the Android sensors HAL can poll.
+#
+# The chip's address comes from the AD0 strap (0x69 or 0x68, both seen on New
+# 3DS boards); ctr_gyro.c probes the other one when the node's address does
+# not answer, so it needs ctr_i2c.c to report a NAK instead of returning FF.
+python3 "$PORT/scripts/fix-i2c-ack.py" "$KD"
+python3 "$PORT/scripts/add-ctr-gyro.py" "$KD"
+
 # The MCU charger already exposes a real BAT0/ADP0 through the kernel
 # power_supply class.  Add the HEALTH/TECHNOLOGY properties Android's
 # BatteryService looks for, and poll the MCU + power_supply_changed() so the

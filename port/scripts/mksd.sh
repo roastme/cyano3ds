@@ -7,9 +7,15 @@
 # /data are ext4 *image files* that Linux mounts through a loop device
 # (CONFIG_BLK_DEV_LOOP is enabled in the port's defconfig).
 #
-# Usage: mksd.sh [out-dir] [--with-android]
+# Usage: mksd.sh [out-dir] [--with-android] [--dist=DIR]
 #   <out-dir>        default: <repo>/out/sd
 #   --with-android   also copy android/system.img and android/data.img
+#   --dist=DIR       build dir holding zImage/initramfs/firm (default <repo>/out)
+#
+# ANDROID_FLAVOR=cm6 stages the Old 3DS card instead: the CM6 image pair from
+# out/cm6/android, the CTR device tree and Cyano3DS-CM6.firm.  Its initramfs is
+# built separately (ANDROID_FLAVOR=cm6 mkinitramfs.sh out/cm6-dist), so pass
+# that directory with --dist.
 #
 # Resulting layout on the SD card:
 #
@@ -35,7 +41,8 @@ WITH_ANDROID=0
 for a in "$@"; do
 	case "$a" in
 	--with-android) WITH_ANDROID=1 ;;
-	*) OUT="$a" ;;
+	--dist=*)       DIST="${a#--dist=}" ;;
+	*)              OUT="$a" ;;
 	esac
 done
 OUT="${OUT:-$REPO/out/sd}"
@@ -51,32 +58,50 @@ case "$ANDROID_FLAVOR" in
 	cm7)         ANDROID_NAME="Android 2.3.7 (CyanogenMod 7.2)" ;;
 	gingerbread) ANDROID_NAME="Android 2.3.3 (Gingerbread)" ;;
 	froyo)       ANDROID_NAME="Android 2.2 (Froyo)" ;;
+	cm6)         ANDROID_NAME="Android 2.2 (CyanogenMod 6)"; CARD_TARGET="Old 3DS / 3DS / 2DS" ;;
 	*)           ANDROID_FLAVOR="cm7"; ANDROID_NAME="Android 2.3.7 (CyanogenMod 7.2)" ;;
+esac
+CARD_TARGET="${CARD_TARGET:-Nintendo 3DS}"
+
+# Per-flavor inputs.  CM6 is the Old 3DS: its own image pair, its own device
+# tree (CTR) and the CM6 FIRM.  The kernel and the ARM9 firmware are shared.
+case "$ANDROID_FLAVOR" in
+	cm6)
+		IMG_DIR="$REPO/out/cm6/android"
+		DTB=nintendo3ds_ctr.dtb
+		FIRM="$DIST/Cyano3DS-CM6.firm"
+		[ -f "$FIRM" ] || FIRM="$DIST/Cyano3DS.firm"
+		;;
+	*)
+		IMG_DIR="$REPO/out/android"
+		DTB=nintendo3ds_ktr.dtb
+		FIRM="$DIST/Cyano3DS.firm"
+		;;
 esac
 
 say() { printf '\n==> %s\n' "$*"; }
 need() { [ -f "$1" ] || { echo "missing $1 (run the build scripts first)" >&2; exit 1; }; }
 
 need "$DIST/zImage"
-need "$DIST/nintendo3ds_ktr.dtb"
+need "$DIST/$DTB"
 need "$DIST/arm9linuxfw.bin"
 need "$DIST/initramfs.cpio.gz"
-need "$DIST/Cyano3DS.firm"
+need "$FIRM"
 
 say "creating $OUT"
 mkdir -p "$OUT/linux"
 
 cp "$DIST/zImage"                "$OUT/linux/zImage"
-cp "$DIST/nintendo3ds_ktr.dtb"   "$OUT/linux/nintendo3ds_ktr.dtb"
+cp "$DIST/$DTB"                  "$OUT/linux/$DTB"
 cp "$DIST/arm9linuxfw.bin"       "$OUT/linux/arm9linuxfw.bin"
 cp "$DIST/initramfs.cpio.gz"     "$OUT/linux/initramfs.cpio.gz"
-cp "$DIST/Cyano3DS.firm"       "$OUT/Cyano3DS.firm"
+cp "$FIRM"                     "$OUT/Cyano3DS.firm"
 
-if [ "$WITH_ANDROID" = 1 ] || [ -f "$REPO/out/android/system.img" ]; then
+if [ "$WITH_ANDROID" = 1 ] || [ -f "$IMG_DIR/system.img" ]; then
 	say "Android disk images"
 	mkdir -p "$OUT/android"
 	for img in system data; do
-		src="$REPO/out/android/$img.img"
+		src="$IMG_DIR/$img.img"
 		if [ -f "$src" ]; then
 			cp "$src" "$OUT/android/$img.img"
 		elif [ "${ALLOW_EMPTY_ANDROID:-0}" = 1 ]; then
@@ -96,9 +121,14 @@ if [ "$WITH_ANDROID" = 1 ] || [ -f "$REPO/out/android/system.img" ]; then
 	ls -lh "$OUT/android" | sed 's/^/  /'
 fi
 
+# The build this card came from, so a bug report can name it.
+VERSION="$(git -C "$REPO" describe --tags --always --dirty 2>/dev/null || echo unknown)"
+
 cat > "$OUT/ANDROID-3DS-README.txt" <<TXT
-$ANDROID_NAME on the Nintendo 3DS - SD card contents
+$ANDROID_NAME on the $CARD_TARGET - SD card contents
 =========================================================
+
+Build: Cyano3DS $VERSION
 
 Files here are loaded by firm_linux_loader (Cyano3DS.firm) from this card.
 
@@ -122,7 +152,7 @@ What you should see
   * the TOP screen counts the packages as system_server scans them;
   * finally the Android launcher (Launcher2/ADW) appears on the BOTTOM screen.
 
-  A boot with `ctr_lcd_fb.debug=1` on the kernel command line paints the
+  A boot with \`ctr_lcd_fb.debug=1\` on the kernel command line paints the
   display self-test card on the bottom screen instead of leaving it black.
 
 FIRST BOOT

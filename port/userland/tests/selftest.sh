@@ -4,10 +4,10 @@
 #
 # The bring-up init runs it a few minutes after Android starts and copies the
 # result to SD:/CYANO3DS/selftest.txt, so a real-hardware boot reports on lid
-# sleep, Wi-Fi, audio, cameras, external storage, /data persistence and the
-# console log without anyone typing a command.  It only reads state, except
-# for a one-second microphone recording (pcmtest), which it skips while
-# something else holds the capture stream.
+# sleep, Wi-Fi, audio, cameras, motion sensors, external storage, /data
+# persistence and the console log without anyone typing a command.  It only
+# reads state, except for a one-second microphone recording (pcmtest), which it
+# skips while something else holds the capture stream.
 #
 # Usage: selftest            (exit status = number of FAILs)
 
@@ -153,6 +153,151 @@ if [ -f /system/lib/libcameraservice.so ] && grep -q CameraHardwareN3ds /system/
 	pass "camera HAL in /system/lib/libcameraservice.so"
 else
 	fail "camera HAL in /system/lib/libcameraservice.so (stub camera; is CYANO3DS/libcameraservice.so on the card?)"
+fi
+
+echo "--- motion sensors (MCU accelerometer + ITG-1010/L3GD20H gyroscope) ---"
+# The zero-rate level moves as the part warms up (the datasheet allows
+# 0.03-0.05 dps per degree, a few LSB over the first minutes), so measure it
+# again now that the console has been on for a while.  gyrocal adds to the
+# calibration in force instead of replacing it, and its stillness gate keeps
+# the previous one if the console is being moved.
+if [ -x /bin/gyrocal ]; then
+	/bin/gyrocal 2>&1 | while IFS= read -r line; do info "$line"; done
+fi
+ACC=""
+GYRO=""
+for d in /sys/bus/iio/devices/iio:device*; do
+	[ -e "$d/in_accel_x_raw" ] && ACC=$d
+	[ -e "$d/in_anglvel_x_raw" ] && GYRO=$d
+done
+# One "x y z" line of raw values, so a series is one pipe into awk.
+raw_xyz() {
+	printf '%s %s %s\n' "$(cat "$1/$2_x_raw" 2>/dev/null)" \
+		"$(cat "$1/$2_y_raw" 2>/dev/null)" \
+		"$(cat "$1/$2_z_raw" 2>/dev/null)"
+}
+# What a user sees as "the numbers jump around" is either a real noise floor or
+# a broken read, and the two look nothing alike in a min/max spread.
+jitter() { # $1 dir, $2 prefix, $3 label
+	j=0
+	while [ $j -lt 25 ]; do
+		raw_xyz "$1" "$2"
+		j=$((j + 1))
+		sleep 0.02
+	done | awk -v l="$3" '
+		{ for (k = 1; k <= 3; k++) {
+			if (NR == 1 || $k < mn[k]) mn[k] = $k
+			if (NR == 1 || $k > mx[k]) mx[k] = $k
+			sm[k] += $k } }
+		END { printf "  %s jitter %d samples @20ms: x %d..%d y %d..%d z %d..%d (mean %.0f %.0f %.0f)\n",
+			l, NR, mn[1], mx[1], mn[2], mx[2], mn[3], mx[3],
+			sm[1]/NR, sm[2]/NR, sm[3]/NR }'
+}
+# Five samples a second apart, in the units the HAL reports.  At rest the
+# accelerometer must read one g (9.81 m/s^2, on Android's +z when the console
+# lies flat with the screen up) and the gyroscope ~0 rad/s: a wrong scale, a
+# swapped axis or a noisy MCU/IMU read all show up in one line.
+if [ -n "$ACC" ]; then
+	pass "accelerometer IIO device ($ACC, MCU LIS331DLH)"
+	ASCALE=$(cat "$ACC/in_accel_scale" 2>/dev/null)
+	info "accel scale $ASCALE m/s^2/LSB, enabled=$(cat "$ACC/in_accel_en" 2>/dev/null)"
+	i=0
+	while [ $i -lt 5 ]; do
+		raw_xyz "$ACC" in_accel | awk -v s="$ASCALE" -v i="$i" '
+			{ printf "  a t+%ds raw %6d %6d %6d |a|=%5.2f m/s^2  HAL %+.2f %+.2f %+.2f\n",
+				i, $1, $2, $3, s * sqrt($1*$1 + $2*$2 + $3*$3),
+				-$1*s, $2*s, -$3*s }'
+		i=$((i + 1))
+		sleep 1
+	done
+	# Name the pose, so the report says whether the map is right without
+	# anyone having to interpret the numbers: flat with the screen up must
+	# put one g on HAL +z.
+	raw_xyz "$ACC" in_accel | awk -v s="$ASCALE" '
+		{ x = -$1*s; y = $2*s; z = -$3*s
+		  m = sqrt(x*x + y*y + z*z)
+		  ax = (x < 0 ? -x : x); ay = (y < 0 ? -y : y); az = (z < 0 ? -z : z)
+		  if (m < 1.5) { printf "  pose: HAL %+.2f %+.2f %+.2f, |a| too small to tell\n", x, y, z }
+		  else if (az > 0.9*m && z > 0) printf "  pose: flat, screen up - landscape is correct\n"
+		  else if (az > 0.9*m) printf "  pose: flat, screen DOWN (or the z sign is inverted)\n"
+		  else if (ay > 0.9*m && y > 0) printf "  pose: upright, hinge up\n"
+		  else if (ay > ax) printf "  pose: mostly upright, %s end down\n", (y > 0 ? "hinge" : "D-pad")
+		  else printf "  pose: sideways, %s side up\n", (x > 0 ? "right" : "left") }'
+	jitter "$ACC" in_accel a
+else
+	fail "accelerometer IIO device (no in_accel_* channel)"
+fi
+if [ -n "$GYRO" ]; then
+	pass "gyroscope IIO device ($GYRO, $(cat "$GYRO/name" 2>/dev/null))"
+	GSCALE=$(cat "$GYRO/in_anglvel_scale" 2>/dev/null)
+	# The driver refuses reads while powered down, so turn it on for the
+	# duration unless a running app already did - and leave it as we found it.
+	GEN=$(cat "$GYRO/in_anglvel_en" 2>/dev/null)
+	[ "$GEN" = "1" ] || echo 1 > "$GYRO/in_anglvel_en" 2>/dev/null
+	info "gyro scale $GSCALE rad/s/LSB, enabled=$(cat "$GYRO/in_anglvel_en" 2>/dev/null)$( [ "$GEN" = "1" ] || echo ', powered up by the test')"
+	i=0
+	while [ $i -lt 5 ]; do
+		raw_xyz "$GYRO" in_anglvel | awk -v s="$GSCALE" -v i="$i" '
+			{ printf "  w t+%ds raw %6d %6d %6d |w|=%6.3f rad/s  HAL %+.3f %+.3f %+.3f\n",
+				i, $1, $2, $3, s * sqrt($1*$1 + $2*$2 + $3*$3),
+				-$1*s, $2*s, -$3*s }'
+		i=$((i + 1))
+		sleep 1
+	done
+	jitter "$GYRO" in_anglvel w
+	# ctr_gyro.c subtracts in_anglvel_*_calibbias from every read; /bin/gyrocal
+	# measures it at boot.  Without it a console lying still reads a couple of
+	# deg/s, which Android integrates into a drifting pointer.
+	cal=""
+	for a in x y z; do
+		v=$(cat "$GYRO/in_anglvel_${a}_calibbias" 2>/dev/null)
+		cal="$cal ${v:-?}"
+	done
+	cal=${cal# }
+	info "gyro calibbias ${cal:-none} LSB (measured at boot by /bin/gyrocal)"
+	# What matters is the bias, not one noisy sample: average 20 reads.
+	w=$({ i=0
+	       while [ $i -lt 20 ]; do
+		       raw_xyz "$GYRO" in_anglvel
+		       i=$((i + 1))
+		       sleep 0.02
+	       done; } | awk '
+		{ n++; for (j = 1; j <= 3; j++) s[j] += $j }
+		END { for (j = 1; j <= 3; j++) { m = s[j] / n; if (m < 0) m = -m; if (m > w) w = m }
+		      printf "%.0f", w + 0 }')
+	if [ "${w:-99}" -le 10 ]; then
+		pass "gyro at rest averages $w LSB (zero-rate offset removed)"
+	else
+		fail "gyro at rest averages $w LSB (zero-rate offset not removed: is /bin/gyrocal running?)"
+	fi
+	[ "$GEN" = "1" ] || echo 0 > "$GYRO/in_anglvel_en" 2>/dev/null
+else
+	fail "gyroscope IIO device (no in_anglvel_* channel)"
+fi
+info "gyro driver: $(kmsg '3ds-gyro' | tail -n 2 | strip | tr '\n' ' ')"
+if [ -f /system/lib/hw/sensors.nintendo3ds.so ]; then
+	pass "sensors HAL /system/lib/hw/sensors.nintendo3ds.so"
+else
+	fail "sensors HAL missing (the device product did not ship sensors.nintendo3ds)"
+fi
+for f in accelerometer gyroscope; do
+	check "feature file android.hardware.sensor.$f.xml" \
+		test -f "/system/etc/permissions/android.hardware.sensor.$f.xml"
+done
+# Both IMUs share I2C bus 2 (0x10148000) with the IR chip and ZL/ZR.  The
+# ZL/ZR chip at 0x2a is the known-good reference.  The gyro answers at 0x69 or
+# 0x68 (ITG-1010, AD0 strap) or at 0x6b/0x6a (L3GD20H, SA0) depending on the
+# model, and 0x6b is also the other HID id in Nintendo's table.  i2cget reports
+# a NAK as an error because ctr_i2c.c now checks the ACK of the address byte.
+BUS=$(ls -d /sys/bus/i2c/devices/*-002a 2>/dev/null | sed 's#.*/##; s/-002a$//' | head -n 1)
+if [ -n "$BUS" ] && [ -x /bin/busybox ]; then
+	info "I2C bus $BUS ($(cat /sys/bus/i2c/devices/$BUS-002a/name 2>/dev/null) at 0x2a)"
+	for a in 68 69 6b; do
+		info "  i2c-$BUS 0x$a: reg 0x75 = $(/bin/busybox i2cget -y "$BUS" "0x$a" 0x75 2>&1 | tail -n 1), reg 0x00 = $(/bin/busybox i2cget -y "$BUS" "0x$a" 0x00 2>&1 | tail -n 1)"
+	done
+	info "i2c-$BUS map: $(/bin/busybox i2cdetect -y -r "$BUS" 2>&1 | sed -n '2,9p' | tr -s ' ' | tr '\n' '|')"
+else
+	info "I2C scan skipped (no *-002a client or no busybox)"
 fi
 
 echo "--- external storage (fakevold) ---"

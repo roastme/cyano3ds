@@ -12,7 +12,8 @@
 #     the SD card, and the port's own initramfs mounts /system and /data from
 #     ext4 image files and then execs Android's init;
 #   * no GPU driver  -> software GLES1 only, no Adreno/Qcom blobs;
-#   * no modem, Wi-Fi, Bluetooth, GPS, camera, sensors, audio codec.
+#   * no modem, Bluetooth or GPS (Wi-Fi, camera, audio and the
+#     accelerometer/gyroscope are supported by the port's HALs).
 #
 # Cross-checked against the 3DS CPU: ARM11 MPCore = ARMv6K + VFPv2, which is
 # CM7's `armv6-vfp` build variant (and the ABI CM7's ARMv6 devices such as

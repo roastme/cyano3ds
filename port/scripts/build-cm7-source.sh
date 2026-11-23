@@ -173,6 +173,25 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# The sensors HAL is a device-product module (device/nintendo3ds/sensors).  If
+# it is not in the tree, the image boots with no accelerometer or gyroscope and
+# nothing in the UI says why, so stop before packing instead.
+missing=""
+for f in lib/hw/sensors.nintendo3ds.so \
+	etc/permissions/android.hardware.sensor.accelerometer.xml \
+	etc/permissions/android.hardware.sensor.gyroscope.xml; do
+	[ -e "$SYSDIR/$f" ] || missing="$missing $f"
+done
+if [ -n "$missing" ]; then
+	echo "error: the system tree is missing:$missing" >&2
+	echo "  the device product is not applied (or was not rebuilt):" >&2
+	echo "    port/scripts/apply-cm7-device.sh" >&2
+	echo "    cd $CM7_DIR && . build/envsetup.sh && make droidcore -j2" >&2
+	exit 1
+fi
+echo "    sensors HAL + feature files present"
+
+# ---------------------------------------------------------------------------
 say "3/6  packing /system and /data"
 # ---------------------------------------------------------------------------
 mkdir -p "$OUT/android"

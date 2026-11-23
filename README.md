@@ -29,6 +29,7 @@ from fastboot3DS or Luma3DS; nothing on the NAND is written.
 | Boot | fastboot3DS → FIRM payload → Linux → CM7.2 → ADWLauncher + SystemUI on the bottom screen |
 | Display | bottom screen 320x240 RGB565, rotated in the kernel (`ctr_lcd_fb`); software GLES (`libGLES_android`) |
 | Input | resistive touchscreen (direct-touch evdev) and the full button set |
+| Sensors | accelerometer (MCU/LIS331DLH) and the New 3DS gyroscope (ITG-1010 on the XL, L3GD20H on the small New 3DS) through `sensors.nintendo3ds.so` |
 | Audio | CSND + TSC2117/AIC3010 codec through CM7's ALSA HAL (mono), microphone |
 | Storage | read-only `/system` image; `/data` seeded from the card at boot |
 | Battery / RTC | MCU (`BAT0`/`ADP0`) |
@@ -45,7 +46,7 @@ from fastboot3DS or Luma3DS; nothing on the NAND is written.
   kernel console.
 - **No full-system suspend.** Lid sleep only turns the screens off and idles
   the CPU; the deeper sleep (`ctr_deep_sleep=1`) does not wake up.
-- No Bluetooth, GPS, motion sensors or telephony.
+- No Bluetooth, GPS or telephony.
 
 The hard limits of the platform are collected in
 [docs/SCOPE.md](docs/SCOPE.md).

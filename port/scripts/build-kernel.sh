@@ -7,6 +7,7 @@
 # Produces (in dist/):
 #   zImage                    - Linux kernel, loaded by firm_linux_loader
 #   nintendo3ds_ktr.dtb       - device tree for New 3DS / New 3DS XL / New 2DS XL
+#   nintendo3ds_ctr.dtb       - device tree for the Old 3DS / Old 3DS XL / 2DS
 #
 # Requires: arm-linux-gnueabi-gcc (armel, matches linux-3ds' own CI toolchain)
 
@@ -65,6 +66,10 @@ elif [ ! -f "arch/arm/configs/$DEF" ]; then
 	scripts/config --enable  COMMON_CLK
 	scripts/config --enable  CTR_CPUFREQ
 
+	# New 3DS gyroscope (ITG-1010, IIO) and the MCU accelerometer
+	scripts/config --enable  IIO
+	scripts/config --enable  CTR_GYRO
+
 	make olddefconfig >/dev/null
 	make savedefconfig >/dev/null
 	cp defconfig "arch/arm/configs/$DEF"
@@ -104,6 +109,8 @@ scripts/config --enable  ANDROID_ASHMEM       \
 	       --enable  CTR_LCD_FB          \
 	       --enable  CTR_CPUFREQ         \
 	       --enable  CTR_EXTRAPAD        \
+	       --enable  IIO                 \
+	       --enable  CTR_GYRO            \
 	       --enable  CTR_SND             \
 	       --enable  CTR_LID             \
 	       --enable  CTR_CAM             \
@@ -242,6 +249,8 @@ make -j"$(nproc)" zImage dtbs
 mkdir -p "$OUT"
 cp arch/arm/boot/zImage "$OUT/zImage"
 cp arch/arm/boot/dts/nintendo3ds_ktr.dtb "$OUT/" 2>/dev/null || true
+# Both trees are built; the Old 3DS (CM6) card needs the CTR one.
+cp arch/arm/boot/dts/nintendo3ds_ctr.dtb "$OUT/" 2>/dev/null || true
 cp ctr_lcd_fb_stamp 2>/dev/null || true
 
 echo
@@ -254,6 +263,7 @@ grep -c "CONFIG_ANDROID_ASHMEM=y" .config | sed 's/^/  CONFIG_ANDROID_ASHMEM=y :
 grep -c "CONFIG_ANDROID_BINDER_IPC=y" .config | sed 's/^/  CONFIG_ANDROID_BINDER_IPC=y : /'
 grep -c "CONFIG_CTR_LCD_FB=y" .config | sed 's/^/  CONFIG_CTR_LCD_FB=y : /'
 grep -c "CONFIG_CTR_EXTRAPAD=y" .config | sed 's/^/  CONFIG_CTR_EXTRAPAD=y : /'
+grep -c "CONFIG_CTR_GYRO=y" .config | sed 's/^/  CONFIG_CTR_GYRO=y : /'
 grep -c "CONFIG_CTR_SND=y" .config | sed 's/^/  CONFIG_CTR_SND=y : /'
 grep -c "CONFIG_CTR_LID=y" .config | sed 's/^/  CONFIG_CTR_LID=y : /'
 grep -c "CONFIG_CTR_CAM=y" .config | sed 's/^/  CONFIG_CTR_CAM=y : /'

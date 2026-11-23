@@ -33,7 +33,16 @@ only have the experimental CyanogenMod 6 build; see [CM6.md](CM6.md).
   networks; WPA3-only and enterprise (802.1X) networks are not supported.
 - **No cellular radio.** The 3DS has none, and Cyano3DS does not simulate one:
   there is no dialer, no SMS/telephony service and no "mobile data" over Wi-Fi.
-- **No Bluetooth, GPS or motion sensors.**
+- **No Bluetooth or GPS.**
+
+## Motion sensors
+
+The accelerometer (ST LIS331DLH behind the MCU) and the New 3DS gyroscope
+(InvenSense ITG-1010 on the XL, ST L3GD20H on the small New 3DS; I2C bus 2)
+are exposed to Android by
+`sensors.nintendo3ds.so`, which polls their IIO sysfs attributes. There is no
+magnetometer, so there is no compass or absolute-orientation sensor. The Old
+3DS gyroscope (ITG-3270) is not supported by the CM7 build.
 
 ## Camera
 
